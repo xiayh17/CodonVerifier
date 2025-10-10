@@ -1,0 +1,6 @@
+References:  
+1. NCBI Consensus CDS (CCDS) Project. (2025). Retrieved July 2, 2025, from https://www.ncbi.nlm.nih.gov/CCDS/  
+2. National Center for Biotechnology Information (NCBI). (2025). GenBank. Retrieved July 2, 2025, from https://www.ncbi.nlm.nih.gov/genbank/  
+3. National Center for Biotechnology Information (NCBI). (2025). Protein. Retrieved July 2, 2025, from https://www.ncbi.nlm.nih.gov/protein/
+4. UniProt Consortium. (2025). UniProt: the Universal Protein Knowledgebase [2025 release]. Nucleic Acids Research, 53(D1), D560-D569. https://doi.org/10.1093/nar/gky1049  
+5. European Nucleotide Archive (ENA). (2025). EMBL-EBI. Retrieved July 2, 2025, from https://www.ebi.ac.uk/ena  

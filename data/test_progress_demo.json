@@ -1,0 +1,202 @@
+[
+{
+  "task": "extract_features",
+  "status": "success",
+  "output": {
+    "sequence": "ATGCGTACTGGTAATGCAAACTAA",
+    "sequence_length": 24,
+    "loglik": -32.054268128945516,
+    "avg_loglik": -1.3936638316932832,
+    "perplexity": 4.029586767798466,
+    "geom": 0.2481644043481765,
+    "model_version": "evo2-enhanced",
+    "backend": "evo2"
+  },
+  "metadata": {
+    "request_id": "record_0",
+    "processing_time_ms": 7348,
+    "service": "evo2-enhanced",
+    "version": "1.0.0"
+  }
+},
+{
+  "task": "extract_features",
+  "status": "success",
+  "output": {
+    "sequence": "ATGATTAAATCCGACCAGGAGACCTGA",
+    "sequence_length": 27,
+    "loglik": -37.151280854646586,
+    "avg_loglik": -1.4288954174864072,
+    "perplexity": 4.1740860221486615,
+    "geom": 0.23957340473909014,
+    "model_version": "evo2-enhanced",
+    "backend": "evo2"
+  },
+  "metadata": {
+    "request_id": "record_1",
+    "processing_time_ms": 110,
+    "service": "evo2-enhanced",
+    "version": "1.0.0"
+  }
+},
+{
+  "task": "extract_features",
+  "status": "success",
+  "output": {
+    "sequence": "ATGCTTCATTGCAAAGGGAATAATCTATGA",
+    "sequence_length": 30,
+    "loglik": -39.457820503469,
+    "avg_loglik": -1.3606145001196208,
+    "perplexity": 3.8985882488174863,
+    "geom": 0.2565031073243804,
+    "model_version": "evo2-enhanced",
+    "backend": "evo2"
+  },
+  "metadata": {
+    "request_id": "record_2",
+    "processing_time_ms": 152,
+    "service": "evo2-enhanced",
+    "version": "1.0.0"
+  }
+},
+{
+  "task": "extract_features",
+  "status": "success",
+  "output": {
+    "sequence": "ATGTTTCATGATTTACCGGGAGTTAAATAG",
+    "sequence_length": 30,
+    "loglik": -41.30852718119517,
+    "avg_loglik": -1.4244319717653506,
+    "perplexity": 4.1554967327577215,
+    "geom": 0.2406451176142227,
+    "model_version": "evo2-enhanced",
+    "backend": "evo2"
+  },
+  "metadata": {
+    "request_id": "record_3",
+    "processing_time_ms": 53,
+    "service": "evo2-enhanced",
+    "version": "1.0.0"
+  }
+},
+{
+  "task": "extract_features",
+  "status": "success",
+  "output": {
+    "sequence": "ATGAGCACAACATACCAATGTATCGTCAGGTAA",
+    "sequence_length": 33,
+    "loglik": -45.21221683120792,
+    "avg_loglik": -1.4128817759752474,
+    "perplexity": 4.107776054002294,
+    "geom": 0.24344072969257385,
+    "model_version": "evo2-enhanced",
+    "backend": "evo2"
+  },
+  "metadata": {
+    "request_id": "record_4",
+    "processing_time_ms": 120,
+    "service": "evo2-enhanced",
+    "version": "1.0.0"
+  }
+},
+{
+  "task": "extract_features",
+  "status": "success",
+  "output": {
+    "sequence": "ATGAGTGTGTCCTGTTGGGAGTTTAATGCCGGATAA",
+    "sequence_length": 36,
+    "loglik": -49.892256724652476,
+    "avg_loglik": -1.4254930492757851,
+    "perplexity": 4.159908377019873,
+    "geom": 0.24038990991344683,
+    "model_version": "evo2-enhanced",
+    "backend": "evo2"
+  },
+  "metadata": {
+    "request_id": "record_5",
+    "processing_time_ms": 120,
+    "service": "evo2-enhanced",
+    "version": "1.0.0"
+  }
+},
+{
+  "task": "extract_features",
+  "status": "success",
+  "output": {
+    "sequence": "ATGGTGCAGTTAGTCGATCTCGCACGTTGCGTTTCATTTTGA",
+    "sequence_length": 42,
+    "loglik": -57.94845648186299,
+    "avg_loglik": -1.413376987362512,
+    "perplexity": 4.109810775247551,
+    "geom": 0.24332020491619005,
+    "model_version": "evo2-enhanced",
+    "backend": "evo2"
+  },
+  "metadata": {
+    "request_id": "record_6",
+    "processing_time_ms": 115,
+    "service": "evo2-enhanced",
+    "version": "1.0.0"
+  }
+},
+{
+  "task": "extract_features",
+  "status": "success",
+  "output": {
+    "sequence": "ATGAACAGAGAAGAAATGCACTGTGATGTTGTCAAAATTTAA",
+    "sequence_length": 42,
+    "loglik": -54.13553050503228,
+    "avg_loglik": -1.3203787928056654,
+    "perplexity": 3.7448396269415727,
+    "geom": 0.2670341321977263,
+    "model_version": "evo2-enhanced",
+    "backend": "evo2"
+  },
+  "metadata": {
+    "request_id": "record_7",
+    "processing_time_ms": 56,
+    "service": "evo2-enhanced",
+    "version": "1.0.0"
+  }
+},
+{
+  "task": "extract_features",
+  "status": "success",
+  "output": {
+    "sequence": "ATGATTTACCGGGAGTTAAATAGAGCATTGGCTATTCTTTAA",
+    "sequence_length": 42,
+    "loglik": -55.7960922011365,
+    "avg_loglik": -1.360880297588695,
+    "perplexity": 3.8996246214334924,
+    "geom": 0.25643493850759475,
+    "model_version": "evo2-enhanced",
+    "backend": "evo2"
+  },
+  "metadata": {
+    "request_id": "record_8",
+    "processing_time_ms": 57,
+    "service": "evo2-enhanced",
+    "version": "1.0.0"
+  }
+},
+{
+  "task": "extract_features",
+  "status": "success",
+  "output": {
+    "sequence": "ATGAATGCTGCTATTTTCCGCTTCTTTTTTTACTTTAGCACCTGA",
+    "sequence_length": 45,
+    "loglik": -58.20986287267547,
+    "avg_loglik": -1.3229514289244426,
+    "perplexity": 3.7544861397881375,
+    "geom": 0.26634803346388947,
+    "model_version": "evo2-enhanced",
+    "backend": "evo2"
+  },
+  "metadata": {
+    "request_id": "record_9",
+    "processing_time_ms": 119,
+    "service": "evo2-enhanced",
+    "version": "1.0.0"
+  }
+}
+]

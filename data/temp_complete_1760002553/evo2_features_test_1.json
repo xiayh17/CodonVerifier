@@ -1,0 +1,22 @@
+[
+  {
+    "task": "extract_features",
+    "status": "success",
+    "output": {
+      "sequence": "ATGCGTACTGGTAATGCAAACTAA",
+      "sequence_length": 24,
+      "loglik": -32.054268128945516,
+      "avg_loglik": -1.3936638316932832,
+      "perplexity": 4.029586767798466,
+      "geom": 0.2481644043481765,
+      "model_version": "evo2-enhanced",
+      "backend": "evo2"
+    },
+    "metadata": {
+      "request_id": "record_0",
+      "processing_time_ms": 6706,
+      "service": "evo2-enhanced",
+      "version": "1.0.0"
+    }
+  }
+]
