@@ -1,0 +1,158 @@
+services:
+  # Evo2 Service with Local Model
+  evo2:
+    build:
+      context: .
+      dockerfile: services/evo2/Dockerfile
+    image: codon-verifier/evo2:latest
+    container_name: evo2-service
+    volumes:
+      - type: bind
+        source: ${PROJECT_ROOT}/data
+        target: /data
+      - logs:/logs
+      - cache_hf:/cache/huggingface
+      # 挂载本地代码以避免频繁重建镜像
+      - ./codon_verifier:/app/codon_verifier:ro
+      - ./services/evo2/app_enhanced.py:/app/app_enhanced.py:ro
+      - ./services/evo2/utils.py:/app/utils.py:ro
+      # 模型目录（可通过 .env 设置 EVO2_MODELS_DIR）
+      - ${EVO2_MODELS_DIR:-/mnt/d/HuggingFace}:/models:ro
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - PYTHONPATH=/app
+      - HF_HOME=/cache/huggingface
+      - PYTHONUNBUFFERED=1
+      # 设置模型路径
+      - EVO2_MODEL_PATH=/models/evo2_7b.pt
+      - USE_EVO2_LM=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - codon-network
+
+  # Sequence Analyzer Service - DNA Sequence Verification and Analysis
+  sequence_analyzer:
+    build:
+      context: .
+      dockerfile: services/sequence_analyzer/Dockerfile
+    image: sequence-analyzer/sequence-analyzer:latest
+    container_name: sequence-analyzer-service
+    volumes:
+      - type: bind
+        source: ${PROJECT_ROOT}/data
+        target: /data
+      - logs:/logs
+      - ./codon_verifier:/app/codon_verifier:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - codon-network
+
+  # Training Service - Surrogate Model Training
+  training:
+    build:
+      context: .
+      dockerfile: services/training/Dockerfile
+    image: codon-verifier/training:latest
+    container_name: training-service
+    volumes:
+      - type: bind
+        source: ${PROJECT_ROOT}/data
+        target: /data
+      - logs:/logs
+      - models:/data/output/models
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - codon-network
+
+  # Structure Features Lite Service - Lightweight structural feature prediction
+  structure_features_lite:
+    build:
+      context: .
+      dockerfile: services/structure_features_lite/Dockerfile
+    image: codon-verifier/structure-features-lite:latest
+    container_name: structure-features-lite-service
+    volumes:
+      - type: bind
+        source: ${PROJECT_ROOT}/data
+        target: /data
+      - logs:/logs
+      - ./services/structure_features_lite:/app/services/structure_features_lite:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - codon-network
+
+  # MSA Features Lite Service - Lightweight evolutionary feature prediction
+  msa_features_lite:
+    build:
+      context: .
+      dockerfile: services/msa_features_lite/Dockerfile
+    image: codon-verifier/msa-features-lite:latest
+    container_name: msa-features-lite-service
+    volumes:
+      - type: bind
+        source: ${PROJECT_ROOT}/data
+        target: /data
+      - logs:/logs
+      - ./services/msa_features_lite:/app/services/msa_features_lite:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - codon-network
+
+  # Feature Integrator Service - Merge all enhanced features
+  feature_integrator:
+    build:
+      context: .
+      dockerfile: services/feature_integrator/Dockerfile
+    image: codon-verifier/feature-integrator:latest
+    container_name: feature-integrator-service
+    volumes:
+      - type: bind
+        source: ${PROJECT_ROOT}/data
+        target: /data
+      - logs:/logs
+      - ./services/feature_integrator:/app/services/feature_integrator:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - codon-network
+
+  # Model Testing Service - Production Model Testing and Evaluation
+  model_testing:
+    build:
+      context: .
+      dockerfile: services/model_testing/Dockerfile
+    image: codon-verifier/model-testing:latest
+    container_name: model-testing-service
+    volumes:
+      - type: bind
+        source: ${PROJECT_ROOT}/data
+        target: /data
+      - logs:/logs
+      - models:/data/models
+      - test_results:/data/test_results
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - codon-network
+
+networks:
+  codon-network:
+    driver: bridge
+
+volumes:
+  logs:
+  models:
+  test_results:
+  scoring_results:
+  cache_hf:
+

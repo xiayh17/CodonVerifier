@@ -82,15 +82,33 @@ class CompleteFeaturePipeline:
                 cmd.extend(["--max-records", str(limit)])
             
             logger.info(f"Command: {' '.join(cmd)}")
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True, cwd=str(self.project_root))
-            logger.info(result.stdout)
+            
+            # Use Popen for real-time output streaming
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                cwd=str(self.project_root)
+            )
+            
+            # Stream output in real-time
+            for line in process.stdout:
+                print(line, end='', flush=True)
+            
+            returncode = process.wait()
+            
+            if returncode != 0:
+                logger.error(f"Conversion failed with code {returncode}")
+                return False
+            
             logger.info(f"✓ JSONL dataset created: {output_jsonl}")
             self.stats['steps_completed'].append('convert')
             return True
         
-        except subprocess.CalledProcessError as e:
+        except Exception as e:
             logger.error(f"Conversion failed: {e}")
-            logger.error(e.stderr)
             return False
     
     def step2_generate_structure_features(
@@ -131,14 +149,27 @@ class CompleteFeaturePipeline:
                 cmd.extend(['--limit', str(limit)])
         
         logger.info(f"Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(self.project_root))
         
-        if result.returncode != 0:
-            logger.error(f"Structure feature generation failed:")
-            logger.error(result.stderr)
+        # Use Popen for real-time output streaming
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            cwd=str(self.project_root)
+        )
+        
+        # Stream output in real-time
+        for line in process.stdout:
+            print(line, end='', flush=True)
+        
+        returncode = process.wait()
+        
+        if returncode != 0:
+            logger.error(f"Structure feature generation failed with code {returncode}")
             return False
         
-        logger.info(result.stdout)
         logger.info("✓ Structure features generated")
         self.stats['steps_completed'].append('structure')
         return True
@@ -181,14 +212,27 @@ class CompleteFeaturePipeline:
                 cmd.extend(['--limit', str(limit)])
         
         logger.info(f"Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(self.project_root))
         
-        if result.returncode != 0:
-            logger.error(f"MSA feature generation failed:")
-            logger.error(result.stderr)
+        # Use Popen for real-time output streaming
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            cwd=str(self.project_root)
+        )
+        
+        # Stream output in real-time
+        for line in process.stdout:
+            print(line, end='', flush=True)
+        
+        returncode = process.wait()
+        
+        if returncode != 0:
+            logger.error(f"MSA feature generation failed with code {returncode}")
             return False
         
-        logger.info(result.stdout)
         logger.info("✓ MSA features generated")
         self.stats['steps_completed'].append('msa')
         return True
@@ -234,14 +278,27 @@ class CompleteFeaturePipeline:
             ]
         
         logger.info(f"Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(self.project_root))
         
-        if result.returncode != 0:
-            logger.error(f"Feature integration failed:")
-            logger.error(result.stderr)
+        # Use Popen for real-time output streaming
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            cwd=str(self.project_root)
+        )
+        
+        # Stream output in real-time
+        for line in process.stdout:
+            print(line, end='', flush=True)
+        
+        returncode = process.wait()
+        
+        if returncode != 0:
+            logger.error(f"Feature integration failed with code {returncode}")
             return False
         
-        logger.info(result.stdout)
         logger.info("✓ Features integrated")
         self.stats['steps_completed'].append('integrate')
         return True
@@ -343,15 +400,33 @@ sys.exit(0 if success else 1)
             ]
             
             logger.info(f"Command: {' '.join(cmd)}")
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True, cwd=str(self.project_root))
-            logger.info(result.stdout)
+            
+            # Use Popen for real-time output streaming
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                cwd=str(self.project_root)
+            )
+            
+            # Stream output in real-time
+            for line in process.stdout:
+                print(line, end='', flush=True)
+            
+            returncode = process.wait()
+            
+            if returncode != 0:
+                logger.error(f"Expression enhancement failed with code {returncode}")
+                return False
+            
             logger.info(f"✓ Enhanced expression data created: {output_jsonl}")
             self.stats['steps_completed'].append('enhance_expression')
             return True
         
-        except subprocess.CalledProcessError as e:
+        except Exception as e:
             logger.error(f"Expression enhancement failed: {e}")
-            logger.error(e.stderr)
             return False
     
     def run_complete_pipeline(
