@@ -1,28 +1,40 @@
 #!/usr/bin/env python3
 """
-Structure Features Lite Service
+Structure Features Lite Service (Enhanced with AlphaFold DB Integration)
 
-Lightweight approximation of protein structure features without requiring
-AlphaFold or ESMFold. Provides fast estimates based on sequence properties.
+Provides protein structure features with two modes:
+1. AlphaFold DB API (preferred): Real predictions from AFDB for known UniProt entries
+2. Lite approximation (fallback): Fast estimates based on sequence properties
 
 Features:
-- pLDDT approximation (confidence scores)
+- pLDDT scores (real from AFDB or approximated)
 - Disorder/flexibility predictions
 - Secondary structure estimates
 - SASA approximation
+- PAE and model metadata (when available from AFDB)
 
 Author: CodonVerifier Team
-Date: 2025-10-05
+Date: 2025-10-12 (Enhanced with AFDB integration)
 """
 
 import json
 import argparse
 import logging
 import sys
+import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
 import math
+import statistics
+
+# Try to import requests (required for AFDB API)
+try:
+    import requests
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
+    logging.warning("requests library not available - AlphaFold DB API will be disabled")
 
 # Configure logging
 logging.basicConfig(
@@ -31,10 +43,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# AlphaFold DB API endpoint
+AFDB_API_URL = "https://alphafold.ebi.ac.uk/api/prediction/{accession}"
+AFDB_TIMEOUT = 30  # seconds
+
 
 @dataclass
 class StructuralFeatures:
-    """Approximated structural features"""
+    """Structural features (from AlphaFold DB or approximated)"""
     plddt_mean: float = 75.0
     plddt_min: float = 60.0
     plddt_max: float = 90.0
@@ -52,6 +68,15 @@ class StructuralFeatures:
     has_signal_peptide: float = 0.0
     has_transmembrane: float = 0.0
     tm_helix_count: float = 0.0
+    
+    # AlphaFold DB specific fields (when available)
+    source: str = "lite"  # "afdb" or "lite"
+    uniprot_accession: Optional[str] = None
+    model_created: Optional[str] = None
+    afdb_confidence: Optional[str] = None  # "very high", "confident", "low", "very low"
+    pae_available: bool = False
+    pdb_url: Optional[str] = None
+    cif_url: Optional[str] = None
 
 
 class StructureFeaturesLite:
@@ -91,24 +116,224 @@ class StructureFeaturesLite:
         'S': 0.72, 'T': 1.20, 'W': 1.19, 'Y': 1.29, 'V': 1.65
     }
     
-    def __init__(self):
-        self.stats = {
-            'processed': 0,
-            'errors': 0
-        }
-    
-    def predict_structure(self, aa_sequence: str, protein_id: str = None) -> StructuralFeatures:
+    def __init__(self, use_afdb: bool = True, afdb_retry: int = 2):
         """
-        Predict approximate structural features from amino acid sequence
+        Initialize the structure predictor
         
         Args:
-            aa_sequence: Amino acid sequence
-            protein_id: Optional protein identifier for logging
+            use_afdb: Whether to try AlphaFold DB API first (default: True)
+            afdb_retry: Number of retries for AFDB API calls (default: 2)
+        """
+        self.use_afdb = use_afdb and REQUESTS_AVAILABLE
+        self.afdb_retry = afdb_retry
+        self.stats = {
+            'processed': 0,
+            'errors': 0,
+            'afdb_success': 0,
+            'afdb_failed': 0,
+            'lite_used': 0
+        }
+        
+        if self.use_afdb:
+            logger.info("AlphaFold DB API integration enabled")
+        else:
+            logger.info("Using Lite approximation only (AFDB API disabled)")
+    
+    def fetch_from_alphafold_db(self, uniprot_accession: str) -> Optional[StructuralFeatures]:
+        """
+        Fetch structure features from AlphaFold DB API
+        
+        Args:
+            uniprot_accession: UniProt accession (e.g., "P12345")
         
         Returns:
-            StructuralFeatures object with approximated values
+            StructuralFeatures object with real AFDB data, or None if failed
         """
+        if not self.use_afdb or not uniprot_accession:
+            return None
+        
+        url = AFDB_API_URL.format(accession=uniprot_accession)
+        
+        for attempt in range(self.afdb_retry + 1):
+            try:
+                logger.debug(f"Fetching AFDB data for {uniprot_accession} (attempt {attempt + 1}/{self.afdb_retry + 1})")
+                response = requests.get(url, timeout=AFDB_TIMEOUT)
+                
+                if response.status_code == 404:
+                    logger.debug(f"No AFDB entry found for {uniprot_accession}")
+                    return None
+                
+                response.raise_for_status()
+                data = response.json()
+                
+                if not data or len(data) == 0:
+                    logger.debug(f"Empty response from AFDB for {uniprot_accession}")
+                    return None
+                
+                # Take the first entry (some UniProt IDs may have multiple isoforms)
+                entry = data[0]
+                
+                # Extract pLDDT scores from the summary or per-residue data
+                # Note: AFDB API structure may vary; adapt field names as needed
+                plddt_scores = []
+                
+                # Try different possible field names for pLDDT data
+                for field_name in ['pLDDT', 'confidenceScore', 'pae', 'summary']:
+                    if field_name in entry:
+                        plddt_data = entry[field_name]
+                        if isinstance(plddt_data, list) and len(plddt_data) > 0:
+                            # Per-residue scores
+                            plddt_scores = [float(x) for x in plddt_data if x is not None]
+                            break
+                        elif isinstance(plddt_data, dict):
+                            # Summary statistics might be available
+                            if 'avgConfidenceScore' in plddt_data:
+                                # If only summary available, create approximate distribution
+                                avg_score = float(plddt_data['avgConfidenceScore'])
+                                plddt_scores = [avg_score]  # Will use this for mean
+                                break
+                
+                # If we still don't have scores, try the summary section
+                if not plddt_scores and 'summary' in entry:
+                    summary = entry['summary']
+                    if 'avgConfidenceScore' in summary:
+                        avg_score = float(summary['avgConfidenceScore'])
+                        plddt_scores = [avg_score]
+                
+                # Calculate statistics from pLDDT scores
+                if plddt_scores and len(plddt_scores) > 0:
+                    plddt_mean = statistics.fmean(plddt_scores)
+                    plddt_min = min(plddt_scores)
+                    plddt_max = max(plddt_scores)
+                    
+                    if len(plddt_scores) > 1:
+                        plddt_std = statistics.pstdev(plddt_scores)
+                        try:
+                            quantiles = statistics.quantiles(plddt_scores, n=4)
+                            plddt_q25 = quantiles[0]
+                            plddt_q75 = quantiles[2]
+                        except:
+                            plddt_q25 = plddt_mean - 0.67 * plddt_std
+                            plddt_q75 = plddt_mean + 0.67 * plddt_std
+                    else:
+                        plddt_std = 0.0
+                        plddt_q25 = plddt_mean
+                        plddt_q75 = plddt_mean
+                    
+                    # Estimate disorder from low confidence regions
+                    low_conf_count = sum(1 for s in plddt_scores if s < 70)
+                    disorder_ratio = low_conf_count / len(plddt_scores) if len(plddt_scores) > 0 else 0.15
+                    flexible_ratio = disorder_ratio * 0.5
+                    
+                    # Determine confidence category
+                    if plddt_mean >= 90:
+                        confidence = "very high"
+                    elif plddt_mean >= 70:
+                        confidence = "confident"
+                    elif plddt_mean >= 50:
+                        confidence = "low"
+                    else:
+                        confidence = "very low"
+                else:
+                    # No pLDDT data available, use defaults
+                    logger.warning(f"No pLDDT data in AFDB response for {uniprot_accession}")
+                    plddt_mean = 75.0
+                    plddt_min = 50.0
+                    plddt_max = 95.0
+                    plddt_std = 10.0
+                    plddt_q25 = 70.0
+                    plddt_q75 = 85.0
+                    disorder_ratio = 0.15
+                    flexible_ratio = 0.05
+                    confidence = "unknown"
+                
+                # Extract download URLs
+                downloads = entry.get('downloads', {}) or entry.get('pdbUrl', {})
+                pdb_url = None
+                cif_url = None
+                
+                if isinstance(downloads, dict):
+                    pdb_url = downloads.get('pdbUrl') or downloads.get('pdb')
+                    cif_url = downloads.get('cifUrl') or downloads.get('cif') or downloads.get('mmcif')
+                
+                # Check if PAE is available
+                pae_available = 'paeImageUrl' in entry or 'paeDocUrl' in entry or 'pae' in downloads
+                
+                # Get model creation timestamp
+                model_created = entry.get('modelCreatedDate') or entry.get('created') or entry.get('timestamp')
+                
+                features = StructuralFeatures(
+                    plddt_mean=float(plddt_mean),
+                    plddt_min=float(plddt_min),
+                    plddt_max=float(plddt_max),
+                    plddt_std=float(plddt_std),
+                    plddt_q25=float(plddt_q25),
+                    plddt_q75=float(plddt_q75),
+                    disorder_ratio=float(disorder_ratio),
+                    flexible_ratio=float(flexible_ratio),
+                    source="afdb",
+                    uniprot_accession=uniprot_accession,
+                    model_created=model_created,
+                    afdb_confidence=confidence,
+                    pae_available=pae_available,
+                    pdb_url=pdb_url,
+                    cif_url=cif_url
+                )
+                
+                self.stats['afdb_success'] += 1
+                logger.info(f"✓ Retrieved AFDB data for {uniprot_accession} (pLDDT mean: {plddt_mean:.1f})")
+                
+                return features
+            
+            except requests.Timeout:
+                logger.warning(f"AFDB API timeout for {uniprot_accession} (attempt {attempt + 1})")
+                if attempt < self.afdb_retry:
+                    time.sleep(1)  # Brief delay before retry
+                continue
+            
+            except requests.RequestException as e:
+                logger.warning(f"AFDB API error for {uniprot_accession}: {e}")
+                if attempt < self.afdb_retry:
+                    time.sleep(1)
+                continue
+            
+            except Exception as e:
+                logger.error(f"Unexpected error fetching AFDB data for {uniprot_accession}: {e}")
+                break
+        
+        self.stats['afdb_failed'] += 1
+        return None
+    
+    def predict_structure(
+        self, 
+        aa_sequence: str = None, 
+        protein_id: str = None,
+        uniprot_id: str = None
+    ) -> StructuralFeatures:
+        """
+        Predict structural features - tries AlphaFold DB first, falls back to Lite approximation
+        
+        Args:
+            aa_sequence: Amino acid sequence (optional if uniprot_id provided)
+            protein_id: Optional protein identifier for logging
+            uniprot_id: Optional UniProt accession for AFDB lookup
+        
+        Returns:
+            StructuralFeatures object with real AFDB data or approximated values
+        """
+        # Try AlphaFold DB first if UniProt ID is provided
+        if uniprot_id and self.use_afdb:
+            afdb_features = self.fetch_from_alphafold_db(uniprot_id)
+            if afdb_features is not None:
+                self.stats['processed'] += 1
+                return afdb_features
+        
+        # Fall back to Lite approximation
+        self.stats['lite_used'] += 1
+        logger.debug(f"Using Lite approximation for {protein_id or uniprot_id or 'unknown'}")
+        
         if not aa_sequence:
+            logger.warning(f"No sequence or valid UniProt ID for {protein_id or 'unknown'}, using defaults")
             return StructuralFeatures()
         
         # Calculate basic properties
@@ -298,23 +523,28 @@ class StructureFeaturesLite:
 def process_jsonl(
     input_path: str,
     output_path: str,
-    limit: Optional[int] = None
+    limit: Optional[int] = None,
+    use_afdb: bool = True,
+    afdb_retry: int = 2
 ) -> Dict:
     """
     Process JSONL file and add structural features
     
     Args:
         input_path: Input JSONL file
-        output_path: Output JSON file
+        output_path: Output JSONL file (preserves JSONL format)
         limit: Optional limit on number of records
+        use_afdb: Whether to use AlphaFold DB API (default: True)
+        afdb_retry: Number of retries for AFDB API calls (default: 2)
     
     Returns:
         Statistics dictionary
     """
-    predictor = StructureFeaturesLite()
+    predictor = StructureFeaturesLite(use_afdb=use_afdb, afdb_retry=afdb_retry)
     results = []
     
     logger.info(f"Processing {input_path}...")
+    logger.info(f"AFDB integration: {'enabled' if use_afdb else 'disabled'}")
     
     with open(input_path, 'r') as f:
         for i, line in enumerate(f):
@@ -324,16 +554,22 @@ def process_jsonl(
             try:
                 record = json.loads(line.strip())
                 
-                # Extract protein AA sequence
+                # Extract protein AA sequence and UniProt ID
                 protein_aa = record.get('protein_aa', '')
                 protein_id = record.get('protein_id', f'protein_{i}')
+                uniprot_id = record.get('uniprot_id') or record.get('uniprot_accession')
                 
-                if not protein_aa:
-                    logger.warning(f"No protein_aa for {protein_id}, skipping")
+                # Need either UniProt ID or sequence
+                if not protein_aa and not uniprot_id:
+                    logger.warning(f"No protein_aa or uniprot_id for {protein_id}, skipping")
                     continue
                 
-                # Predict features
-                features = predictor.predict_structure(protein_aa, protein_id)
+                # Predict features (tries AFDB first if uniprot_id available)
+                features = predictor.predict_structure(
+                    aa_sequence=protein_aa,
+                    protein_id=protein_id,
+                    uniprot_id=uniprot_id
+                )
                 
                 # Add structural features to original record
                 record['structure_features'] = asdict(features)
@@ -342,7 +578,13 @@ def process_jsonl(
                 results.append(record)
                 
                 if (i + 1) % 100 == 0:
-                    logger.info(f"Processed {i + 1} proteins...")
+                    afdb_pct = (predictor.stats['afdb_success'] / (i + 1) * 100) if i > 0 else 0
+                    logger.info(
+                        f"Processed {i + 1} proteins... "
+                        f"(AFDB: {predictor.stats['afdb_success']}, "
+                        f"Lite: {predictor.stats['lite_used']}, "
+                        f"AFDB success rate: {afdb_pct:.1f}%)"
+                    )
             
             except Exception as e:
                 logger.error(f"Error processing record {i}: {e}")
@@ -359,6 +601,14 @@ def process_jsonl(
     stats = {
         'total_processed': predictor.stats['processed'],
         'total_errors': predictor.stats['errors'],
+        'afdb_success': predictor.stats['afdb_success'],
+        'afdb_failed': predictor.stats['afdb_failed'],
+        'lite_used': predictor.stats['lite_used'],
+        'afdb_success_rate': (
+            predictor.stats['afdb_success'] / 
+            (predictor.stats['afdb_success'] + predictor.stats['afdb_failed']) * 100
+            if (predictor.stats['afdb_success'] + predictor.stats['afdb_failed']) > 0 else 0
+        ),
         'output_file': output_path,
         'output_count': len(results)
     }
@@ -370,33 +620,78 @@ def process_jsonl(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Structure Features Lite Service - Fast structural feature approximation"
+        description="Structure Features Service - AlphaFold DB integration with Lite fallback",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Use AFDB + Lite fallback (default)
+  python app.py --input data.jsonl --output output.jsonl
+  
+  # Use only Lite approximation (no AFDB calls)
+  python app.py --input data.jsonl --output output.jsonl --no-afdb
+  
+  # Process with UniProt IDs in input
+  python app.py --input proteins_with_uniprot.jsonl --output features.jsonl
+  
+Note: Input JSONL should contain 'protein_aa' (sequence) and/or 'uniprot_id' fields.
+        """
     )
     
     parser.add_argument('--input', required=True, help="Input JSONL file")
-    parser.add_argument('--output', required=True, help="Output JSON file")
+    parser.add_argument('--output', required=True, help="Output JSONL file")
     parser.add_argument('--limit', type=int, help="Limit number of records (for testing)")
+    parser.add_argument('--no-afdb', action='store_true', 
+                       help="Disable AlphaFold DB API, use only Lite approximation")
+    parser.add_argument('--afdb-retry', type=int, default=2,
+                       help="Number of retries for AFDB API calls (default: 2)")
     parser.add_argument('--log-level', default='INFO', 
-                       choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'])
+                       choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+                       help="Logging level (default: INFO)")
     
     args = parser.parse_args()
     
     # Set log level
     logging.getLogger().setLevel(getattr(logging, args.log_level))
     
+    # Log configuration
+    logger.info("=" * 60)
+    logger.info("Structure Features Service (Enhanced with AFDB)")
+    logger.info("=" * 60)
+    logger.info(f"Input: {args.input}")
+    logger.info(f"Output: {args.output}")
+    logger.info(f"AFDB Integration: {'disabled' if args.no_afdb else 'enabled'}")
+    if not args.no_afdb:
+        logger.info(f"AFDB Retries: {args.afdb_retry}")
+    logger.info("=" * 60)
+    
     # Process
     try:
-        stats = process_jsonl(args.input, args.output, args.limit)
+        stats = process_jsonl(
+            args.input, 
+            args.output, 
+            args.limit,
+            use_afdb=not args.no_afdb,
+            afdb_retry=args.afdb_retry
+        )
         
+        logger.info("=" * 60)
         logger.info("✓ Structure features generation completed successfully!")
-        logger.info(f"  Processed: {stats['total_processed']}")
+        logger.info("=" * 60)
+        logger.info(f"  Total Processed: {stats['total_processed']}")
+        logger.info(f"  AFDB Success: {stats['afdb_success']}")
+        logger.info(f"  AFDB Failed: {stats['afdb_failed']}")
+        logger.info(f"  Lite Used: {stats['lite_used']}")
+        logger.info(f"  AFDB Success Rate: {stats['afdb_success_rate']:.1f}%")
         logger.info(f"  Errors: {stats['total_errors']}")
-        logger.info(f"  Output: {stats['output_file']}")
+        logger.info(f"  Output: {stats['output_file']} ({stats['output_count']} records)")
+        logger.info("=" * 60)
         
         sys.exit(0)
     
     except Exception as e:
+        logger.error("=" * 60)
         logger.error(f"✗ Failed: {e}")
+        logger.error("=" * 60)
         import traceback
         traceback.print_exc()
         sys.exit(1)

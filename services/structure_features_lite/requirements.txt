@@ -1,0 +1,13 @@
+# Structure Features Service Dependencies
+
+# Required for AlphaFold DB API integration
+requests>=2.25.0
+
+# Optional but recommended for better performance
+# (These are typically in standard library, but listed for completeness)
+# - json (built-in)
+# - argparse (built-in)
+# - logging (built-in)
+# - statistics (built-in, Python 3.4+)
+# - dataclasses (built-in, Python 3.7+)
+
