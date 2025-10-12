@@ -45,9 +45,15 @@ class CompleteFeaturePipeline:
     def __init__(
         self,
         use_docker: bool = True,
-        project_root: Optional[Path] = None
+        project_root: Optional[Path] = None,
+        skip_evo2: bool = False,
+        reuse_evo2_from: Optional[str] = None,
+        real_msa_jsonl: Optional[str] = None
     ):
         self.use_docker = use_docker
+        self.skip_evo2 = skip_evo2
+        self.reuse_evo2_from = reuse_evo2_from
+        self.real_msa_jsonl = real_msa_jsonl
         
         # Save project root directory (absolute path)
         if project_root is None:
@@ -60,6 +66,92 @@ class CompleteFeaturePipeline:
             'start_time': time.time(),
             'steps_completed': []
         }
+        
+        # Load Evo2 cache if reusing
+        self.evo2_cache = {}
+        if reuse_evo2_from:
+            logger.info(f"Loading Evo2 features from: {reuse_evo2_from}")
+            self._load_evo2_cache(reuse_evo2_from)
+    
+    def _load_evo2_cache(self, jsonl_path: str):
+        """Load Evo2 features from existing JSONL file"""
+        import hashlib
+        
+        count = 0
+        with open(jsonl_path, 'r') as f:
+            for line in f:
+                try:
+                    rec = json.loads(line.strip())
+                    
+                    # Create stable key
+                    protein_id = rec.get('protein_id', '')
+                    sequence = rec.get('sequence', '')
+                    
+                    if sequence:
+                        seq_hash = hashlib.sha256(sequence.encode()).hexdigest()[:16]
+                        key = f"{protein_id}_{seq_hash}" if protein_id else seq_hash
+                        
+                        # Extract Evo2 features
+                        extra = rec.get('extra_features', {})
+                        evo2_feats = {k: v for k, v in extra.items() if k.startswith('evo2_')}
+                        
+                        if evo2_feats:
+                            self.evo2_cache[key] = evo2_feats
+                            count += 1
+                
+                except Exception as e:
+                    logger.warning(f"Error loading Evo2 cache entry: {e}")
+        
+        logger.info(f"✓ Loaded {count} Evo2 feature sets from cache")
+    
+    def _apply_evo2_cache(self, input_jsonl: str, output_json: str):
+        """Apply cached Evo2 features to records"""
+        import hashlib
+        
+        results = []
+        matched = 0
+        total = 0
+        
+        with open(input_jsonl, 'r') as f:
+            for line in f:
+                try:
+                    rec = json.loads(line.strip())
+                    total += 1
+                    
+                    # Create stable key
+                    protein_id = rec.get('protein_id', '')
+                    sequence = rec.get('sequence', '')
+                    
+                    if sequence:
+                        seq_hash = hashlib.sha256(sequence.encode()).hexdigest()[:16]
+                        key = f"{protein_id}_{seq_hash}" if protein_id else seq_hash
+                        
+                        # Look up in cache
+                        if key in self.evo2_cache:
+                            evo2_feats = self.evo2_cache[key]
+                            results.append({
+                                'protein_id': protein_id,
+                                'sequence': sequence,
+                                'evo2_features': evo2_feats
+                            })
+                            matched += 1
+                        else:
+                            # No cache hit - add empty features
+                            results.append({
+                                'protein_id': protein_id,
+                                'sequence': sequence,
+                                'evo2_features': {}
+                            })
+                
+                except Exception as e:
+                    logger.warning(f"Error applying Evo2 cache: {e}")
+        
+        # Write output
+        Path(output_json).parent.mkdir(parents=True, exist_ok=True)
+        with open(output_json, 'w') as f:
+            json.dump(results, f, indent=2)
+        
+        logger.info(f"✓ Applied cache: {matched}/{total} records matched")
     
     def step1_convert_tsv_to_jsonl(
         self,
@@ -190,13 +282,23 @@ class CompleteFeaturePipeline:
             data_dir = (self.project_root / 'data').resolve()
             input_rel = Path(input_jsonl).resolve().relative_to(data_dir)
             output_rel = Path(output_json).resolve().relative_to(data_dir)
+            real_msa_arg = []
+            if self.real_msa_jsonl:
+                # Require the real MSA file to be under data/ for container visibility
+                real_msa_path = Path(self.real_msa_jsonl).resolve()
+                try:
+                    real_msa_rel = real_msa_path.relative_to(data_dir)
+                except Exception:
+                    raise ValueError(f"--real-msa-jsonl must be under {data_dir} when using Docker: {real_msa_path}")
+                real_msa_arg = ['--real-msa-jsonl', f'/data/{real_msa_rel}']
             cmd = [
                 'docker-compose', '-f', 'docker-compose.microservices.yml',
                 'run', '--rm',
                 '-v', f'{data_dir}:/data',
                 'msa_features_lite',
                 '--input', f'/data/{input_rel}',
-                '--output', f'/data/{output_rel}'
+                '--output', f'/data/{output_rel}',
+                *real_msa_arg
             ]
             if limit:
                 cmd.extend(['--limit', str(limit)])
@@ -208,6 +310,8 @@ class CompleteFeaturePipeline:
                 '--input', input_jsonl,
                 '--output', output_json
             ]
+            if self.real_msa_jsonl:
+                cmd.extend(['--real-msa-jsonl', self.real_msa_jsonl])
             if limit:
                 cmd.extend(['--limit', str(limit)])
         
@@ -308,10 +412,27 @@ class CompleteFeaturePipeline:
         input_jsonl: str,
         output_json: str
     ) -> bool:
-        """Step 5: Extract Evo2 features"""
+        """Step 5: Extract Evo2 features (or skip/reuse)"""
         logger.info("=" * 60)
         logger.info("STEP 5: Extracting Evo2 Features")
         logger.info("=" * 60)
+        
+        # Handle skip or reuse
+        if self.skip_evo2:
+            logger.info("⏩ Skipping Evo2 extraction (--skip-evo2 enabled)")
+            # Create empty output file
+            Path(output_json).parent.mkdir(parents=True, exist_ok=True)
+            with open(output_json, 'w') as f:
+                json.dump([], f)
+            self.stats['steps_completed'].append('evo2_skipped')
+            return True
+        
+        if self.evo2_cache:
+            logger.info(f"⏩ Reusing Evo2 features from cache ({len(self.evo2_cache)} entries)")
+            # Create output with cached features
+            self._apply_evo2_cache(input_jsonl, output_json)
+            self.stats['steps_completed'].append('evo2_reused')
+            return True
         
         try:
             # Use the existing Evo2 extraction logic
@@ -563,11 +684,24 @@ Examples:
                        help="Use Docker services (default: True)")
     parser.add_argument('--no-docker', action='store_true',
                        help="Run locally without Docker")
+    parser.add_argument('--skip-evo2', action='store_true',
+                       help="Skip Evo2 feature extraction (only compute other features)")
+    parser.add_argument('--reuse-evo2-from', type=str,
+                       help="Reuse Evo2 features from existing JSONL file")
+    parser.add_argument('--real-msa-jsonl', type=str,
+                       help="Use real MSA JSONL and strictly join by protein_id in step 3")
     
     args = parser.parse_args()
     
     # Handle Docker flag
     use_docker = args.use_docker and not args.no_docker
+    
+    # Validate reuse-evo2-from
+    if args.reuse_evo2_from:
+        reuse_path = Path(args.reuse_evo2_from)
+        if not reuse_path.exists():
+            logger.error(f"Evo2 reuse file not found: {reuse_path}")
+            sys.exit(1)
     
     # Validate input
     input_path = Path(args.input)
@@ -576,7 +710,12 @@ Examples:
         sys.exit(1)
     
     # Create pipeline
-    pipeline = CompleteFeaturePipeline(use_docker=use_docker)
+    pipeline = CompleteFeaturePipeline(
+        use_docker=use_docker,
+        skip_evo2=args.skip_evo2,
+        reuse_evo2_from=args.reuse_evo2_from,
+        real_msa_jsonl=args.real_msa_jsonl
+    )
     
     # Run pipeline
     result = pipeline.run_complete_pipeline(

@@ -35,35 +35,107 @@ def process_task(task_data: Dict[str, Any]) -> Dict[str, Any]:
     start_time = time.time()
     
     try:
-        task_type = task_data.get('task', 'verify')
+        from codon_verifier.metrics import (
+            cai, tai, fop, gc_content, codon_pair_bias_score, 
+            codon_pair_score, cpg_upa_content, rare_codon_runs,
+            homopolymers, find_forbidden_sites
+        )
+        from codon_verifier.hosts.tables import get_host_tables
+        from codon_verifier.codon_utils import validate_cds
+        
+        task_type = task_data.get('task', 'analyze')
         input_data = task_data.get('input', {})
         
-        sequence = input_data.get('sequence', '')
+        sequence = input_data.get('sequence', '').upper().replace('U', 'T')
+        host = input_data.get('host', 'E_coli')
+        forbidden_motifs = input_data.get('forbidden_motifs', [])
         
-        logger.info(f"Verifying sequence (length: {len(sequence)})")
+        logger.info(f"Analyzing sequence (length: {len(sequence)}, host: {host})")
         
-        # TODO: Implement actual verification logic
-        # This is a placeholder
+        # Validate CDS
+        valid, msg = validate_cds(sequence)
+        if not valid:
+            logger.warning(f"Sequence validation failed: {msg}")
+        
+        # Get host tables
+        usage_table, trna_weights, cpb_table = get_host_tables(host, include_cpb=True)
+        
+        # Calculate codon metrics
+        metrics = {}
+        warnings = []
+        
+        try:
+            # Basic sequence metrics
+            metrics['gc_content'] = gc_content(sequence)
+            metrics['length'] = len(sequence)
+            metrics['has_start_codon'] = sequence.startswith('ATG')
+            metrics['has_stop_codon'] = sequence.endswith(('TAA', 'TAG', 'TGA'))
+            
+            if valid:
+                # Codon usage metrics
+                metrics['cai'] = cai(sequence, usage_table)
+                metrics['tai'] = tai(sequence, trna_weights)
+                metrics['fop'] = fop(sequence, usage_table)
+                
+                # Codon pair metrics
+                metrics['cpb'] = codon_pair_bias_score(sequence, cpb_table)
+                metrics['cps'] = codon_pair_score(sequence, usage_table)
+                
+                # Dinucleotide analysis
+                dinuc_stats = cpg_upa_content(sequence)
+                metrics.update({
+                    'cpg_count': dinuc_stats['cpg_count'],
+                    'cpg_freq': dinuc_stats['cpg_freq'],
+                    'cpg_obs_exp': dinuc_stats['cpg_obs_exp'],
+                    'upa_count': dinuc_stats['upa_count'],
+                    'upa_freq': dinuc_stats['upa_freq'],
+                    'upa_obs_exp': dinuc_stats['upa_obs_exp'],
+                })
+                
+                # Check for problematic features
+                if dinuc_stats['cpg_obs_exp'] > 1.5:
+                    warnings.append(f"High CpG content detected (obs/exp ratio: {dinuc_stats['cpg_obs_exp']:.2f})")
+                if dinuc_stats['upa_obs_exp'] > 1.5:
+                    warnings.append(f"High UpA content detected (obs/exp ratio: {dinuc_stats['upa_obs_exp']:.2f})")
+                
+                # Rare codon runs
+                rare_runs = rare_codon_runs(sequence, usage_table)
+                metrics['rare_codon_runs'] = len(rare_runs)
+                if rare_runs:
+                    warnings.append(f"Found {len(rare_runs)} rare codon runs")
+                
+                # Homopolymers
+                homos = homopolymers(sequence, min_len=6)
+                metrics['homopolymers'] = len(homos)
+                if homos:
+                    warnings.append(f"Found {len(homos)} homopolymer stretches (≥6bp)")
+                
+                # Forbidden motifs
+                if forbidden_motifs:
+                    forbidden_hits = find_forbidden_sites(sequence, forbidden_motifs)
+                    metrics['forbidden_sites'] = len(forbidden_hits)
+                    if forbidden_hits:
+                        warnings.append(f"Found {len(forbidden_hits)} forbidden motif sites")
+                
+        except Exception as e:
+            logger.error(f"Error calculating metrics: {e}")
+            warnings.append(f"Metric calculation error: {str(e)}")
+        
         result = {
             "task": task_type,
-            "status": "success",
+            "status": "success" if valid else "warning",
             "output": {
-                "valid": True,
-                "quality_score": 0.92,
-                "metrics": {
-                    "gc_content": 0.52,
-                    "length": len(sequence),
-                    "has_start_codon": True,
-                    "has_stop_codon": True,
-                    "rna_structure_energy": -45.2
-                },
-                "warnings": []
+                "valid": valid,
+                "validation_message": msg if not valid else "Sequence is valid CDS",
+                "metrics": metrics,
+                "warnings": warnings
             },
             "metadata": {
                 "request_id": task_data.get('metadata', {}).get('request_id', 'unknown'),
                 "processing_time_ms": int((time.time() - start_time) * 1000),
                 "service": "sequence_analyzer",
-                "version": "1.0.0"
+                "version": "2.0.0",
+                "host": host
             }
         }
         
@@ -71,6 +143,8 @@ def process_task(task_data: Dict[str, Any]) -> Dict[str, Any]:
         
     except Exception as e:
         logger.error(f"Error processing task: {e}")
+        import traceback
+        traceback.print_exc()
         return {
             "task": task_data.get('task', 'unknown'),
             "status": "error",
@@ -79,7 +153,7 @@ def process_task(task_data: Dict[str, Any]) -> Dict[str, Any]:
                 "request_id": task_data.get('metadata', {}).get('request_id', 'unknown'),
                 "processing_time_ms": int((time.time() - start_time) * 1000),
                 "service": "sequence_analyzer",
-                "version": "1.0.0"
+                "version": "2.0.0"
             }
         }
 

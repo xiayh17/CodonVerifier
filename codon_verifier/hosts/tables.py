@@ -31,6 +31,29 @@ E_COLI_USAGE: Dict[str, float] = {
 
 E_COLI_TRNA = {c: max(0.05, v) for c, v in E_COLI_USAGE.items()}
 
+# E. coli Codon Pair Bias (CPB) scores
+# Based on Coleman et al. (2008) Science and subsequent analyses
+# Negative values = under-represented (disfavored), Positive = over-represented (favored)
+# This is a curated subset of strongly biased pairs
+E_COLI_CPB: Dict[str, float] = {
+    # Strongly disfavored pairs (under-represented)
+    "CGA-CGA": -0.45, "CGA-CGG": -0.38, "CGG-CGA": -0.42, "CGG-CGG": -0.40,
+    "AGA-CGA": -0.35, "AGG-CGA": -0.33, "CGA-AGA": -0.36, "CGA-AGG": -0.34,
+    "ATA-CGA": -0.32, "CGA-ATA": -0.30, "ATA-ATA": -0.28,
+    "CTA-CTA": -0.25, "TTA-CTA": -0.22, "CTA-TTA": -0.23,
+    
+    # Moderately disfavored pairs
+    "AGG-AGG": -0.20, "AGA-AGA": -0.18, "AGA-AGG": -0.19, "AGG-AGA": -0.19,
+    "GCG-GCG": -0.15, "TCG-TCG": -0.14, "CCG-TCG": -0.13,
+    "TTA-TTA": -0.17, "TTA-TTG": -0.12, "TTG-TTA": -0.12,
+    
+    # Favored pairs (over-represented) 
+    "CTG-CTG": 0.35, "GAA-CTG": 0.28, "CTG-GAA": 0.30,
+    "ACC-ACC": 0.25, "GCC-GCC": 0.22, "GCC-ACC": 0.20,
+    "AAA-AAA": 0.18, "GAT-GAT": 0.16, "AAA-GAT": 0.15,
+    "GTG-GTG": 0.20, "GGC-GGC": 0.18, "CGT-CGT": 0.17,
+}
+
 
 # Human (Homo sapiens) - highly expressed genes
 HUMAN_USAGE: Dict[str, float] = {
@@ -57,6 +80,26 @@ HUMAN_USAGE: Dict[str, float] = {
 }
 
 HUMAN_TRNA = {c: max(0.05, v) for c, v in HUMAN_USAGE.items()}
+
+# Human Codon Pair Bias (CPB) scores
+# Based on analysis of highly expressed human genes
+HUMAN_CPB: Dict[str, float] = {
+    # Strongly disfavored pairs (CpG-containing and rare codon pairs)
+    "CGA-CGA": -0.50, "CGG-CGG": -0.42, "CGA-CGG": -0.45, "CGG-CGA": -0.44,
+    "TCG-TCG": -0.35, "GCG-GCG": -0.33, "CCG-CCG": -0.32,
+    "TTA-TTA": -0.30, "CTA-CTA": -0.28, "TTA-CTA": -0.26, "CTA-TTA": -0.27,
+    "ATA-ATA": -0.25, "GTA-GTA": -0.23,
+    
+    # Moderately disfavored pairs
+    "AGA-AGA": -0.18, "TCG-ACG": -0.16, "ACG-TCG": -0.15,
+    "GCG-ACG": -0.14, "CCG-GCG": -0.13,
+    
+    # Favored pairs (over-represented in highly expressed genes)
+    "CTG-CTG": 0.40, "GAG-CTG": 0.32, "CTG-GAG": 0.33,
+    "ACC-ACC": 0.28, "GCC-GCC": 0.26, "GCC-ACC": 0.24,
+    "TCC-TCC": 0.22, "AGC-AGC": 0.21, "TCC-AGC": 0.19,
+    "GTG-GTG": 0.25, "GGC-GGC": 0.23, "GTC-GTC": 0.20,
+}
 
 
 # Mouse (Mus musculus) - highly expressed genes
@@ -85,6 +128,22 @@ MOUSE_USAGE: Dict[str, float] = {
 
 MOUSE_TRNA = {c: max(0.05, v) for c, v in MOUSE_USAGE.items()}
 
+# Mouse CPB scores (similar to human with minor adjustments)
+MOUSE_CPB: Dict[str, float] = {
+    # Strongly disfavored pairs
+    "CGA-CGA": -0.48, "CGG-CGG": -0.40, "CGA-CGG": -0.43, "CGG-CGA": -0.42,
+    "TCG-TCG": -0.34, "GCG-GCG": -0.32, "CCG-CCG": -0.31,
+    "TTA-TTA": -0.29, "CTA-CTA": -0.27, "ATA-ATA": -0.24,
+    
+    # Moderately disfavored pairs
+    "AGA-AGA": -0.17, "TCG-ACG": -0.15, "GTA-GTA": -0.22,
+    
+    # Favored pairs
+    "CTG-CTG": 0.42, "GAG-CTG": 0.33, "CTG-GAG": 0.34,
+    "ACC-ACC": 0.29, "GCC-GCC": 0.27, "GCC-ACC": 0.25,
+    "GTG-GTG": 0.26, "GGC-GGC": 0.24, "GTC-GTC": 0.21,
+}
+
 
 # Saccharomyces cerevisiae (baker's yeast) - highly expressed genes
 S_CEREVISIAE_USAGE: Dict[str, float] = {
@@ -111,6 +170,23 @@ S_CEREVISIAE_USAGE: Dict[str, float] = {
 }
 
 S_CEREVISIAE_TRNA = {c: max(0.05, v) for c, v in S_CEREVISIAE_USAGE.items()}
+
+# S. cerevisiae CPB scores
+S_CEREVISIAE_CPB: Dict[str, float] = {
+    # Strongly disfavored pairs (rare codon combinations)
+    "CGG-CGG": -0.55, "CGG-CGA": -0.50, "CGA-CGG": -0.52, "CGA-CGA": -0.48,
+    "CGC-CGC": -0.40, "TCG-TCG": -0.38, "CCG-CCG": -0.36,
+    "CTC-CTC": -0.35, "CTG-CTG": -0.32, "CTC-CTG": -0.30,
+    
+    # Moderately disfavored pairs
+    "AGG-AGG": -0.25, "CGC-CGA": -0.28, "GCG-GCG": -0.22,
+    
+    # Favored pairs (frequently used in highly expressed genes)
+    "TTA-TTA": 0.35, "TTG-TTG": 0.32, "TTA-TTG": 0.30, "TTG-TTA": 0.30,
+    "GGT-GGT": 0.38, "GCT-GCT": 0.35, "GGT-GCT": 0.28,
+    "AGA-AGA": 0.40, "ACT-ACT": 0.33, "AGA-ACT": 0.25,
+    "CAA-CAA": 0.30, "GAA-GAA": 0.32, "GAT-GAT": 0.28,
+}
 
 
 # Pichia pastoris - highly expressed genes
@@ -139,26 +215,44 @@ P_PASTORIS_USAGE: Dict[str, float] = {
 
 P_PASTORIS_TRNA = {c: max(0.05, v) for c, v in P_PASTORIS_USAGE.items()}
 
-
-# Host selector dictionary
-HOST_TABLES = {
-    "E_coli": (E_COLI_USAGE, E_COLI_TRNA),
-    "Human": (HUMAN_USAGE, HUMAN_TRNA),
-    "Mouse": (MOUSE_USAGE, MOUSE_TRNA),
-    "S_cerevisiae": (S_CEREVISIAE_USAGE, S_CEREVISIAE_TRNA),
-    "P_pastoris": (P_PASTORIS_USAGE, P_PASTORIS_TRNA),
+# P. pastoris CPB scores (similar pattern to S. cerevisiae)
+P_PASTORIS_CPB: Dict[str, float] = {
+    # Strongly disfavored pairs
+    "CGG-CGG": -0.52, "CGA-CGA": -0.46, "CGG-CGA": -0.48, "CGA-CGG": -0.49,
+    "CGC-CGC": -0.38, "TCG-TCG": -0.36, "CCG-CCG": -0.34,
+    "CTC-CTC": -0.33, "CTG-CTG": -0.30, "CTA-CTA": -0.28,
+    
+    # Moderately disfavored pairs
+    "AGG-AGG": -0.23, "GCG-GCG": -0.20, "ACG-ACG": -0.18,
+    
+    # Favored pairs
+    "TTG-TTG": 0.45, "TTA-TTG": 0.38, "TTG-TTA": 0.40,
+    "GGT-GGT": 0.40, "GCT-GCT": 0.37, "GGT-GCT": 0.30,
+    "AGA-AGA": 0.42, "ACT-ACT": 0.35, "AGA-ACT": 0.28,
+    "GAA-GAA": 0.33, "GAT-GAT": 0.30, "CAA-CAA": 0.28,
 }
 
 
-def get_host_tables(host: str) -> tuple[Dict[str, float], Dict[str, float]]:
+# Host selector dictionary (includes usage, tRNA, and CPB tables)
+HOST_TABLES = {
+    "E_coli": (E_COLI_USAGE, E_COLI_TRNA, E_COLI_CPB),
+    "Human": (HUMAN_USAGE, HUMAN_TRNA, HUMAN_CPB),
+    "Mouse": (MOUSE_USAGE, MOUSE_TRNA, MOUSE_CPB),
+    "S_cerevisiae": (S_CEREVISIAE_USAGE, S_CEREVISIAE_TRNA, S_CEREVISIAE_CPB),
+    "P_pastoris": (P_PASTORIS_USAGE, P_PASTORIS_TRNA, P_PASTORIS_CPB),
+}
+
+
+def get_host_tables(host: str, include_cpb: bool = True) -> tuple:
     """
-    Get codon usage and tRNA tables for a given host.
+    Get codon usage, tRNA weights, and optionally CPB tables for a given host.
     
     Args:
         host: Host organism name (E_coli, Human, Mouse, S_cerevisiae, P_pastoris)
+        include_cpb: If True, returns (usage, trna, cpb). If False, returns (usage, trna)
     
     Returns:
-        Tuple of (usage_table, trna_weights)
+        Tuple of (usage_table, trna_weights) or (usage_table, trna_weights, cpb_table)
     
     Raises:
         ValueError: If host is not recognized
@@ -167,4 +261,8 @@ def get_host_tables(host: str) -> tuple[Dict[str, float], Dict[str, float]]:
         raise ValueError(
             f"Unknown host: {host}. Available hosts: {', '.join(HOST_TABLES.keys())}"
         )
-    return HOST_TABLES[host]
+    tables = HOST_TABLES[host]
+    if include_cpb:
+        return tables
+    else:
+        return tables[0], tables[1]

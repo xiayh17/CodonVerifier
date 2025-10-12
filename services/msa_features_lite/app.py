@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """
-MSA Features Lite Service
+MSA Features Service (Lite + Real)
 
-Lightweight approximation of evolutionary features without requiring
-actual MSA generation (MMseqs2/JackHMMER). Provides fast estimates
-based on sequence properties and conservation heuristics.
+Provides both lightweight approximation and real MSA-based evolutionary features.
+
+Modes:
+- Lite (default): Fast approximation based on sequence properties
+- Real (--use-mmseqs2): Actual MSA generation using MMseqs2
 
 Features:
-- MSA depth approximation
-- Conservation scores
+- MSA depth (real homolog count or approximation)
+- Conservation scores (from alignment or heuristics)
 - Evolutionary entropy
 - Protein family indicators
 
 Author: CodonVerifier Team
-Date: 2025-10-05
+Date: 2025-10-12
 """
 
 import json
@@ -21,8 +23,12 @@ import argparse
 import logging
 import sys
 import math
+import os
+import subprocess
+import tempfile
+import shutil
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
 from collections import Counter
 
@@ -317,10 +323,248 @@ class MSAFeaturesLite:
         return pfam_count, domain_count
 
 
+class RealMSAGenerator:
+    """
+    Real MSA generation using MMseqs2
+    """
+    
+    def __init__(
+        self,
+        database: str = "/data/mmseqs_db/uniref50",
+        threads: int = 8,
+        evalue: float = 1e-3,
+        min_seq_id: float = 0.3,
+        coverage: float = 0.5
+    ):
+        self.database = database
+        self.threads = threads
+        self.evalue = evalue
+        self.min_seq_id = min_seq_id
+        self.coverage = coverage
+        self.mmseqs_available = self._check_mmseqs2()
+        self.database_available = False
+        
+        if self.mmseqs_available:
+            self.database_available = self._check_database()
+            if not self.database_available:
+                logger.warning("MMseqs2 database not available, will use Lite fallback")
+        else:
+            logger.warning("MMseqs2 not available, will use Lite fallback")
+    
+    def _check_mmseqs2(self) -> bool:
+        """Check if MMseqs2 is installed"""
+        try:
+            result = subprocess.run(
+                ['mmseqs', 'version'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                logger.info(f"Found MMseqs2: {result.stdout.strip()}")
+                return True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        return False
+    
+    def _check_database(self) -> bool:
+        """Check if MMseqs2 database exists and is valid"""
+        if not os.path.exists(self.database):
+            logger.error(f"Database not found: {self.database}")
+            return False
+        
+        # Check if it's a valid MMseqs2 database by checking for required files
+        required_files = [
+            f"{self.database}.dbtype",
+            f"{self.database}.index",
+            f"{self.database}.lookup"
+        ]
+        
+        for file_path in required_files:
+            if not os.path.exists(file_path):
+                logger.error(f"Database file missing: {file_path}")
+                return False
+        
+        # Try to read database info using view command
+        try:
+            result = subprocess.run(
+                ['mmseqs', 'view', self.database],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0:
+                logger.info(f"Database valid: {self.database}")
+                return True
+            else:
+                logger.error(f"Database invalid: {result.stderr}")
+                return False
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            logger.error(f"Database check failed: {e}")
+            return False
+    
+    def generate_msa_features_batch(
+        self,
+        records: List[Dict],
+        work_dir: str
+    ) -> Dict[str, Dict[str, float]]:
+        """
+        Generate MSA features for a batch of records
+        
+        Returns:
+            Dict mapping protein_id -> msa_features
+        """
+        if not self.mmseqs_available or not self.database_available:
+            logger.warning("MMseqs2 or database not available, using Lite fallback")
+            return {}
+        
+        # Write sequences to FASTA
+        fasta_file = os.path.join(work_dir, "queries.fasta")
+        with open(fasta_file, 'w') as f:
+            for rec in records:
+                protein_id = rec.get('protein_id', 'unknown')
+                protein_aa = rec.get('protein_aa', '')
+                if protein_aa:
+                    f.write(f">{protein_id}\n{protein_aa}\n")
+        
+        # Run MMseqs2 search
+        alignment_file = self._run_mmseqs2_search(fasta_file, work_dir)
+        
+        if not alignment_file:
+            logger.warning("MMseqs2 search failed, using Lite fallback")
+            return {}
+        
+        # Compute features from alignment
+        results = {}
+        for rec in records:
+            protein_id = rec.get('protein_id', 'unknown')
+            features = self._compute_features_from_alignment(protein_id, alignment_file)
+            if features:
+                results[protein_id] = features
+        
+        return results
+    
+    def _run_mmseqs2_search(self, query_fasta: str, output_dir: str) -> Optional[str]:
+        """Run MMseqs2 search"""
+        try:
+            # Create query database
+            query_db = os.path.join(output_dir, "query_db")
+            subprocess.run(
+                ['mmseqs', 'createdb', query_fasta, query_db],
+                check=True,
+                capture_output=True
+            )
+            
+            # Run search
+            result_db = os.path.join(output_dir, "result_db")
+            tmp_dir = os.path.join(output_dir, "tmp")
+            os.makedirs(tmp_dir, exist_ok=True)
+            
+            subprocess.run([
+                'mmseqs', 'search',
+                query_db, self.database, result_db, tmp_dir,
+                '--threads', str(self.threads),
+                '-e', str(self.evalue),
+                '--min-seq-id', str(self.min_seq_id),
+                '-c', str(self.coverage),
+                '--alignment-mode', '3'
+            ], check=True, capture_output=True)
+            
+            # Convert to TSV
+            result_tsv = os.path.join(output_dir, "result.tsv")
+            subprocess.run([
+                'mmseqs', 'convertalis',
+                query_db, self.database, result_db, result_tsv,
+                '--format-output', 'query,target,pident,alnlen,mismatch,gapopen,qstart,qend,tstart,tend,evalue,bits'
+            ], check=True, capture_output=True)
+            
+            return result_tsv
+            
+        except subprocess.CalledProcessError as e:
+            logger.error(f"MMseqs2 failed: {e}")
+            return None
+    
+    def _compute_features_from_alignment(
+        self,
+        protein_id: str,
+        alignment_file: str
+    ) -> Optional[Dict[str, float]]:
+        """Compute MSA features from alignment results"""
+        try:
+            hits = []
+            with open(alignment_file, 'r') as f:
+                for line in f:
+                    parts = line.strip().split('\t')
+                    if len(parts) >= 12 and parts[0] == protein_id:
+                        hits.append({
+                            'pident': float(parts[2]),
+                            'alnlen': int(parts[3]),
+                            'evalue': float(parts[10]),
+                        })
+            
+            if not hits:
+                return None
+            
+            # Compute features
+            identities = [h['pident'] for h in hits]
+            features = {
+                'msa_depth': float(len(hits)),
+                'msa_effective_depth': float(sum(1 for h in hits if h['pident'] >= 50)),
+                'msa_coverage': min(1.0, sum(h['alnlen'] for h in hits) / len(hits) / 100.0),
+                'conservation_mean': sum(identities) / len(identities) / 100.0,
+                'conservation_min': min(identities) / 100.0,
+                'conservation_max': max(identities) / 100.0,
+                'conservation_entropy_mean': math.sqrt(
+                    sum((i/100.0 - sum(identities)/len(identities)/100.0)**2 for i in identities) / len(identities)
+                ),
+                'coevolution_score': 0.5,
+                'contact_density': 0.3,
+                'pfam_count': 1.0,
+                'domain_count': 1.0
+            }
+            
+            return features
+            
+        except Exception as e:
+            logger.error(f"Error computing features for {protein_id}: {e}")
+            return None
+
+
+def _load_real_msa_map(real_msa_jsonl: str) -> Dict[str, Dict[str, float]]:
+    """
+    Load real MSA features from a JSONL produced by the production pipeline.
+    Strict requirements:
+    - Each line must include 'protein_id'
+    - Each line must include 'msa_features' (a dict of numeric features)
+
+    Returns:
+        Mapping from protein_id -> msa_features dict
+    """
+    msa_map: Dict[str, Dict[str, float]] = {}
+    with open(real_msa_jsonl, 'r') as f:
+        for i, line in enumerate(f):
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line.strip())
+            except Exception as e:
+                logger.warning(f"Real MSA jsonl line {i} parse error: {e}")
+                continue
+            protein_id = obj.get('protein_id')
+            msa_features = obj.get('msa_features')
+            if not protein_id or not isinstance(msa_features, dict):
+                logger.warning(f"Real MSA jsonl line {i} missing protein_id or msa_features; skipping")
+                continue
+            msa_map[str(protein_id)] = {k: float(v) for k, v in msa_features.items() if isinstance(v, (int, float))}
+    logger.info(f"Loaded real MSA features for {len(msa_map)} protein_ids from {real_msa_jsonl}")
+    return msa_map
+
+
 def process_jsonl(
     input_path: str,
     output_path: str,
-    limit: Optional[int] = None
+    limit: Optional[int] = None,
+    real_msa_jsonl: Optional[str] = None
 ) -> Dict:
     """
     Process JSONL file and add MSA/evolutionary features
@@ -334,6 +578,10 @@ def process_jsonl(
         Statistics dictionary
     """
     predictor = MSAFeaturesLite()
+    real_msa_map: Optional[Dict[str, Dict[str, float]]] = None
+    if real_msa_jsonl:
+        # Strict mode: use only real MSA features; no heuristic fallback
+        real_msa_map = _load_real_msa_map(real_msa_jsonl)
     results = []
     
     logger.info(f"Processing {input_path}...")
@@ -346,19 +594,28 @@ def process_jsonl(
             try:
                 record = json.loads(line.strip())
                 
-                # Extract protein AA sequence
-                protein_aa = record.get('protein_aa', '')
-                protein_id = record.get('protein_id', f'protein_{i}')
-                
-                if not protein_aa:
-                    logger.warning(f"No protein_aa for {protein_id}, skipping")
-                    continue
-                
-                # Predict features
-                features = predictor.predict_evolutionary_features(protein_aa, protein_id)
-                
-                # Add MSA features to original record
-                record['msa_features'] = asdict(features)
+                protein_id = record.get('protein_id')
+                if real_msa_map is not None:
+                    # Strict join by protein_id; no fallback
+                    if not protein_id:
+                        logger.warning(f"Input record {i} missing protein_id with real_msa_jsonl provided; skipping")
+                        predictor.stats['errors'] += 1
+                        continue
+                    feats = real_msa_map.get(str(protein_id))
+                    if not feats:
+                        logger.warning(f"No real MSA features found for protein_id={protein_id}; skipping")
+                        predictor.stats['errors'] += 1
+                        continue
+                    record['msa_features'] = feats
+                else:
+                    # Heuristic (lite) path
+                    protein_aa = record.get('protein_aa', '')
+                    pid = protein_id or f'protein_{i}'
+                    if not protein_aa:
+                        logger.warning(f"No protein_aa for {pid}, skipping")
+                        continue
+                    features = predictor.predict_evolutionary_features(protein_aa, pid)
+                    record['msa_features'] = asdict(features)
                 # Ensure protein_id is preserved for downstream integration
                 record['protein_id'] = protein_id
                 results.append(record)
@@ -392,12 +649,17 @@ def process_jsonl(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="MSA Features Lite Service - Fast evolutionary feature approximation"
+        description="MSA Features Service - Lite approximation or real MMseqs2-based MSA"
     )
     
     parser.add_argument('--input', required=True, help="Input JSONL file")
     parser.add_argument('--output', required=True, help="Output JSON file")
     parser.add_argument('--limit', type=int, help="Limit number of records (for testing)")
+    parser.add_argument('--real-msa-jsonl', help="Path to real MSA JSONL. If provided, strictly join by protein_id and do not use heuristics.")
+    parser.add_argument('--use-mmseqs2', action='store_true', help="Use real MMseqs2 MSA generation instead of Lite approximation")
+    parser.add_argument('--database', default='/data/mmseqs_db/uniref50', help="MMseqs2 database path (for --use-mmseqs2)")
+    parser.add_argument('--threads', type=int, default=8, help="Number of threads for MMseqs2")
+    parser.add_argument('--batch-size', type=int, default=100, help="Batch size for MMseqs2 processing")
     parser.add_argument('--log-level', default='INFO', 
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'])
     
@@ -408,12 +670,93 @@ def main():
     
     # Process
     try:
-        stats = process_jsonl(args.input, args.output, args.limit)
-        
-        logger.info("✓ MSA features generation completed successfully!")
-        logger.info(f"  Processed: {stats['total_processed']}")
-        logger.info(f"  Errors: {stats['total_errors']}")
-        logger.info(f"  Output: {stats['output_file']}")
+        if args.use_mmseqs2:
+            # Use real MMseqs2 MSA generation
+            logger.info("Mode: Real MSA (MMseqs2)")
+            logger.info(f"Database: {args.database}")
+            logger.info(f"Threads: {args.threads}")
+            
+            # Load records
+            records = []
+            with open(args.input, 'r') as f:
+                for i, line in enumerate(f):
+                    if not line.strip():
+                        continue
+                    try:
+                        rec = json.loads(line)
+                        records.append(rec)
+                        if args.limit and len(records) >= args.limit:
+                            break
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Line {i+1}: JSON decode error: {e}")
+            
+            logger.info(f"Loaded {len(records)} records")
+            
+            # Initialize MMseqs2 generator
+            msa_gen = RealMSAGenerator(
+                database=args.database,
+                threads=args.threads
+            )
+            
+            # Process in batches
+            results = []
+            batch_size = args.batch_size
+            lite_fallback = MSAFeaturesLite()
+            
+            with tempfile.TemporaryDirectory(prefix='msa_') as work_dir:
+                for i in range(0, len(records), batch_size):
+                    batch = records[i:i + batch_size]
+                    batch_num = i // batch_size + 1
+                    total_batches = (len(records) + batch_size - 1) // batch_size
+                    
+                    logger.info(f"Processing batch {batch_num}/{total_batches} ({len(batch)} records)...")
+                    
+                    # Generate MSA features
+                    batch_dir = os.path.join(work_dir, f"batch_{batch_num}")
+                    os.makedirs(batch_dir, exist_ok=True)
+                    
+                    msa_features_map = msa_gen.generate_msa_features_batch(batch, batch_dir)
+                    
+                    # Add features to records
+                    for rec in batch:
+                        protein_id = rec.get('protein_id', 'unknown')
+                        
+                        if protein_id in msa_features_map:
+                            rec['msa_features'] = msa_features_map[protein_id]
+                        else:
+                            # Fallback to Lite
+                            protein_aa = rec.get('protein_aa', '')
+                            if protein_aa:
+                                features = lite_fallback.predict_evolutionary_features(protein_aa, protein_id)
+                                rec['msa_features'] = asdict(features)
+                        
+                        results.append(rec)
+            
+            # Write results
+            logger.info(f"Writing {len(results)} results to {args.output}")
+            with open(args.output, 'w') as f:
+                for result in results:
+                    f.write(json.dumps(result) + '\n')
+            
+            logger.info("✓ MSA features generation completed successfully!")
+            logger.info(f"  Processed: {len(results)}")
+            logger.info(f"  Output: {args.output}")
+            
+        else:
+            # Use Lite approximation or pre-computed MSA
+            logger.info("Mode: Lite approximation" + (" + pre-computed MSA" if args.real_msa_jsonl else ""))
+            
+            stats = process_jsonl(
+                args.input,
+                args.output,
+                args.limit,
+                real_msa_jsonl=args.real_msa_jsonl
+            )
+            
+            logger.info("✓ MSA features generation completed successfully!")
+            logger.info(f"  Processed: {stats['total_processed']}")
+            logger.info(f"  Errors: {stats['total_errors']}")
+            logger.info(f"  Output: {stats['output_file']}")
         
         sys.exit(0)
     

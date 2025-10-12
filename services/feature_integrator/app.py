@@ -141,8 +141,74 @@ class FeatureIntegrator:
             'with_structure': 0,
             'with_msa': 0,
             'with_context': 0,
+            'with_codon_features': 0,
             'errors': 0
         }
+    
+    def extract_codon_features(self, sequence: str, host: str = 'E_coli') -> Dict[str, float]:
+        """
+        Extract codon usage features from DNA sequence
+        
+        Args:
+            sequence: DNA sequence
+            host: Host organism for codon usage tables
+            
+        Returns:
+            Dictionary of codon features with codon_ prefix
+        """
+        features = {}
+        
+        try:
+            from codon_verifier.metrics import (
+                cai, tai, fop, gc_content, codon_pair_bias_score,
+                codon_pair_score, cpg_upa_content, rare_codon_runs,
+                homopolymers
+            )
+            from codon_verifier.hosts.tables import get_host_tables
+            from codon_verifier.codon_utils import validate_cds
+            
+            # Validate sequence
+            valid, msg = validate_cds(sequence)
+            if not valid:
+                logger.warning(f"Invalid CDS: {msg}")
+                return {}
+            
+            # Get host tables
+            usage_table, trna_weights, cpb_table = get_host_tables(host, include_cpb=True)
+            
+            # Calculate codon usage metrics
+            features['codon_cai'] = cai(sequence, usage_table)
+            features['codon_tai'] = tai(sequence, trna_weights)
+            features['codon_fop'] = fop(sequence, usage_table)
+            features['codon_gc'] = gc_content(sequence)
+            
+            # Codon pair metrics
+            features['codon_cpb'] = codon_pair_bias_score(sequence, cpb_table)
+            features['codon_cps'] = codon_pair_score(sequence, usage_table)
+            
+            # Dinucleotide analysis
+            dinuc_stats = cpg_upa_content(sequence)
+            features['codon_cpg_count'] = float(dinuc_stats['cpg_count'])
+            features['codon_cpg_freq'] = dinuc_stats['cpg_freq']
+            features['codon_cpg_obs_exp'] = dinuc_stats['cpg_obs_exp']
+            features['codon_upa_count'] = float(dinuc_stats['upa_count'])
+            features['codon_upa_freq'] = dinuc_stats['upa_freq']
+            features['codon_upa_obs_exp'] = dinuc_stats['upa_obs_exp']
+            
+            # Rare codon runs
+            rare_runs = rare_codon_runs(sequence, usage_table)
+            features['codon_rare_runs'] = float(len(rare_runs))
+            features['codon_rare_run_total_len'] = float(sum(length for _, length in rare_runs))
+            
+            # Homopolymers
+            homos = homopolymers(sequence, min_len=6)
+            features['codon_homopolymers'] = float(len(homos))
+            features['codon_homopoly_total_len'] = float(sum(length for _, _, length in homos))
+            
+        except Exception as e:
+            logger.warning(f"Error extracting codon features: {e}")
+            
+        return features
     
     def integrate_features(
         self,
@@ -198,6 +264,15 @@ class FeatureIntegrator:
             context_features = self.context_extractor.extract_from_metadata(metadata)
             extra_features.update(context_features)
             self.stats['with_context'] += 1
+        
+        # Add codon usage features
+        sequence = integrated.get('sequence', '')
+        host = integrated.get('host', 'E_coli')
+        if sequence:
+            codon_features = self.extract_codon_features(sequence, host)
+            if codon_features:
+                extra_features.update(codon_features)
+                self.stats['with_codon_features'] += 1
         
         # Add extra_features to integrated record
         integrated['extra_features'] = extra_features
@@ -346,6 +421,7 @@ class FeatureIntegrator:
         logger.info(f"  With structure features: {self.stats['with_structure']}")
         logger.info(f"  With MSA features: {self.stats['with_msa']}")
         logger.info(f"  With context features: {self.stats['with_context']}")
+        logger.info(f"  With codon features: {self.stats['with_codon_features']}")
         logger.info(f"  Errors: {self.stats['errors']}")
         
         return integrated_records

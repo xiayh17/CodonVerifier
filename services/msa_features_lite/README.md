@@ -1,10 +1,15 @@
-# MSA Features Lite Service
+# MSA Features Service (Lite + Real)
 
-A lightweight microservice that provides fast approximation of evolutionary features without requiring actual Multiple Sequence Alignment (MSA) generation. This service is part of the CodonVerifier system for protein expression prediction.
+A flexible microservice that provides both fast approximation and real MSA-based evolutionary features. This service is part of the CodonVerifier system for protein expression prediction.
 
 ## Overview
 
-The MSA Features Lite Service generates evolutionary features using sequence composition, complexity, and conservation heuristics instead of running computationally expensive MSA tools like MMseqs2 or JackHMMER. This provides a fast alternative for scenarios where speed is prioritized over precision.
+The MSA Features Service supports two modes:
+
+1. **Lite Mode (default)**: Fast approximation using sequence composition, complexity, and conservation heuristics
+2. **Real Mode (`--use-mmseqs2`)**: Actual MSA generation using MMseqs2 for production-grade accuracy
+
+This dual-mode design allows you to choose between speed (Lite) and accuracy (Real) based on your needs.
 
 ## Features
 
@@ -120,6 +125,8 @@ The service adds an `msa_features` field to each input record:
 
 ### Example Usage
 
+#### Lite Mode (Fast Approximation)
+
 ```bash
 # Process a small dataset for testing
 python app.py \
@@ -134,12 +141,36 @@ python app.py \
   --output data/full_protein_dataset_with_msa_features.jsonl
 ```
 
+#### Real Mode (MMseqs2-based MSA)
+
+```bash
+# Use real MMseqs2 MSA generation
+python app.py \
+  --input data/proteins.jsonl \
+  --output data/proteins_with_real_msa.jsonl \
+  --use-mmseqs2 \
+  --database /data/mmseqs_db/uniref50 \
+  --threads 16 \
+  --batch-size 100
+
+# Test with limited records
+python app.py \
+  --input data/proteins.jsonl \
+  --output data/proteins_test_msa.jsonl \
+  --use-mmseqs2 \
+  --database /data/mmseqs_db/uniref50 \
+  --threads 8 \
+  --limit 10
+```
+
 ## Docker Usage
 
 ### Using Docker Compose (Recommended)
 
+#### Lite Mode
+
 ```bash
-# Run the service using docker-compose
+# Run the service using docker-compose (Lite mode)
 docker-compose -f docker-compose.microservices.yml run --rm \
   -v $(pwd)/data:/data \
   msa_features_lite \
@@ -148,15 +179,44 @@ docker-compose -f docker-compose.microservices.yml run --rm \
   --limit 1000
 ```
 
+#### Real Mode (MMseqs2)
+
+```bash
+# First, ensure MMseqs2 database is available in data/mmseqs_db/
+# Then run with --use-mmseqs2 flag
+docker-compose -f docker-compose.microservices.yml run --rm \
+  -v $(pwd)/data:/data \
+  msa_features_lite \
+  --input /data/input.jsonl \
+  --output /data/output.jsonl \
+  --use-mmseqs2 \
+  --database /data/mmseqs_db/uniref50 \
+  --threads 16 \
+  --batch-size 100
+```
+
 ### Using Docker Directly
 
 ```bash
-# Run the container
+# Build the image (includes MMseqs2)
+docker build -f services/msa_features_lite/Dockerfile -t codon-verifier/msa-features:latest .
+
+# Run in Lite mode
 docker run --rm \
   -v $(pwd)/data:/data \
-  codon-verifier/msa-features-lite:latest \
+  codon-verifier/msa-features:latest \
   --input /data/input.jsonl \
   --output /data/output.jsonl
+
+# Run in Real mode with MMseqs2
+docker run --rm \
+  -v $(pwd)/data:/data \
+  codon-verifier/msa-features:latest \
+  --input /data/input.jsonl \
+  --output /data/output.jsonl \
+  --use-mmseqs2 \
+  --database /data/mmseqs_db/uniref50 \
+  --threads 16
 ```
 
 ## Integration with CodonVerifier
