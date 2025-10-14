@@ -105,6 +105,14 @@ services:
       - ./services/msa_features_lite:/app/services/msa_features_lite:ro
     environment:
       - PYTHONUNBUFFERED=1
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     networks:
       - codon-network
 

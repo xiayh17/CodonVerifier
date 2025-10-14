@@ -194,7 +194,13 @@ ls -lh data/mmseqs_db/
 2. **下载数据库**（可选，仅 Real 模式需要）:
    ```bash
    mkdir -p data/mmseqs_db
+   # 下载小数据库进行测试
+   ./scripts/download_test_database.sh
    # 下载 UniRef50...
+   # 下载生产推荐数据库
+   ./scripts/quick_download_uniref50.sh
+   # 下载更大数据库
+   ./scripts/download_production_database.sh UniRef90 16
    ```
 
 3. **测试 Real 模式**:

@@ -334,20 +334,34 @@ class RealMSAGenerator:
         threads: int = 8,
         evalue: float = 1e-3,
         min_seq_id: float = 0.3,
-        coverage: float = 0.5
+        coverage: float = 0.5,
+        use_gpu: bool = False,
+        gpu_id: int = 0
     ):
         self.database = database
         self.threads = threads
         self.evalue = evalue
         self.min_seq_id = min_seq_id
         self.coverage = coverage
+        self.use_gpu = use_gpu
+        self.gpu_id = gpu_id
         self.mmseqs_available = self._check_mmseqs2()
         self.database_available = False
+        self.gpu_available = False
         
         if self.mmseqs_available:
             self.database_available = self._check_database()
             if not self.database_available:
                 logger.warning("MMseqs2 database not available, will use Lite fallback")
+            
+            # Check GPU availability if requested
+            if self.use_gpu:
+                self.gpu_available = self._check_gpu()
+                if self.gpu_available:
+                    logger.info(f"GPU acceleration enabled (GPU {self.gpu_id})")
+                else:
+                    logger.warning("GPU requested but not available, using CPU")
+                    self.use_gpu = False
         else:
             logger.warning("MMseqs2 not available, will use Lite fallback")
     
@@ -403,6 +417,37 @@ class RealMSAGenerator:
             logger.error(f"Database check failed: {e}")
             return False
     
+    def _check_gpu(self) -> bool:
+        """Check if GPU is available for MMseqs2"""
+        try:
+            # Check if nvidia-smi is available
+            result = subprocess.run(
+                ['nvidia-smi', '--query-gpu=name', '--format=csv,noheader,nounits'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                gpu_name = result.stdout.strip()
+                logger.info(f"Found GPU: {gpu_name}")
+                return True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        
+        # Try to check CUDA availability
+        try:
+            result = subprocess.run(
+                ['mmseqs', 'search', '--help'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if '--gpu' in result.stdout:
+                logger.info("MMseqs2 supports GPU, but no GPU detected")
+            return False
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return False
+    
     def generate_msa_features_batch(
         self,
         records: List[Dict],
@@ -418,6 +463,15 @@ class RealMSAGenerator:
             logger.warning("MMseqs2 or database not available, using Lite fallback")
             return {}
         
+        # Smart GPU/CPU selection based on batch size
+        batch_size = len(records)
+        use_gpu_for_this_batch = self.use_gpu and self.gpu_available
+        
+        # For small batches, CPU is often faster due to GPU initialization overhead
+        if batch_size < 50 and use_gpu_for_this_batch:
+            logger.info(f"Small batch size ({batch_size}), using CPU for better performance")
+            use_gpu_for_this_batch = False
+        
         # Write sequences to FASTA
         fasta_file = os.path.join(work_dir, "queries.fasta")
         with open(fasta_file, 'w') as f:
@@ -427,8 +481,15 @@ class RealMSAGenerator:
                 if protein_aa:
                     f.write(f">{protein_id}\n{protein_aa}\n")
         
-        # Run MMseqs2 search
-        alignment_file = self._run_mmseqs2_search(fasta_file, work_dir)
+        # Run MMseqs2 search with appropriate GPU setting
+        original_use_gpu = self.use_gpu
+        self.use_gpu = use_gpu_for_this_batch
+        
+        try:
+            alignment_file = self._run_mmseqs2_search(fasta_file, work_dir)
+        finally:
+            # Restore original GPU setting
+            self.use_gpu = original_use_gpu
         
         if not alignment_file:
             logger.warning("MMseqs2 search failed, using Lite fallback")
@@ -460,15 +521,56 @@ class RealMSAGenerator:
             tmp_dir = os.path.join(output_dir, "tmp")
             os.makedirs(tmp_dir, exist_ok=True)
             
-            subprocess.run([
+            # Build MMseqs2 search command with conservative parameters
+            search_cmd = [
                 'mmseqs', 'search',
                 query_db, self.database, result_db, tmp_dir,
                 '--threads', str(self.threads),
                 '-e', str(self.evalue),
                 '--min-seq-id', str(self.min_seq_id),
                 '-c', str(self.coverage),
-                '--alignment-mode', '3'
-            ], check=True, capture_output=True)
+                '--alignment-mode', '3',
+                '--max-seqs', '1000',  # 限制搜索结果数量
+                '-s', '7.5'  # 降低敏感度以提高速度
+            ]
+            
+            # Add GPU support if available
+            if self.use_gpu and self.gpu_available:
+                # GPU-specific optimizations
+                search_cmd.extend([
+                    '--gpu', str(self.gpu_id),
+                    '--gpu-memory', '8192',  # 限制GPU显存使用
+                    '--batch-size', '32'     # GPU批次大小
+                ])
+                logger.info(f"Using GPU {self.gpu_id} for MMseqs2 search with GPU optimizations")
+            
+            # Run MMseqs2 search with timeout
+            timeout_duration = 600 if self.use_gpu else 300  # GPU需要更长初始化时间
+            try:
+                logger.info(f"Running MMseqs2 search with {timeout_duration}s timeout...")
+                result = subprocess.run(
+                    search_cmd, 
+                    check=True, 
+                    capture_output=True, 
+                    text=True,
+                    timeout=timeout_duration
+                )
+                logger.info("MMseqs2 search completed successfully")
+            except subprocess.TimeoutExpired:
+                logger.error(f"MMseqs2 search timed out after {timeout_duration} seconds")
+                logger.warning("This may be due to GPU initialization overhead or large database size")
+                logger.warning("Consider using a smaller database (e.g., Swiss-Prot) for testing")
+                return None
+            except subprocess.CalledProcessError as e:
+                logger.error(f"MMseqs2 search failed: {e}")
+                logger.error(f"Command: {' '.join(search_cmd)}")
+                logger.error(f"Stderr: {e.stderr}")
+                if self.use_gpu:
+                    logger.warning("GPU search failed, this may be due to:")
+                    logger.warning("1. MMseqs2 not compiled with GPU support")
+                    logger.warning("2. CUDA drivers not properly installed")
+                    logger.warning("3. GPU memory insufficient")
+                return None
             
             # Convert to TSV
             result_tsv = os.path.join(output_dir, "result.tsv")
@@ -660,6 +762,8 @@ def main():
     parser.add_argument('--database', default='/data/mmseqs_db/uniref50', help="MMseqs2 database path (for --use-mmseqs2)")
     parser.add_argument('--threads', type=int, default=8, help="Number of threads for MMseqs2")
     parser.add_argument('--batch-size', type=int, default=100, help="Batch size for MMseqs2 processing")
+    parser.add_argument('--use-gpu', action='store_true', help="Use GPU acceleration for MMseqs2 (requires CUDA)")
+    parser.add_argument('--gpu-id', type=int, default=0, help="GPU ID to use (default: 0)")
     parser.add_argument('--log-level', default='INFO', 
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'])
     
@@ -695,7 +799,9 @@ def main():
             # Initialize MMseqs2 generator
             msa_gen = RealMSAGenerator(
                 database=args.database,
-                threads=args.threads
+                threads=args.threads,
+                use_gpu=args.use_gpu,
+                gpu_id=args.gpu_id
             )
             
             # Process in batches

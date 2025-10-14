@@ -1,0 +1,56 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Install system dependencies for MMseqs2 and development tools
+RUN apt-get update && apt-get install -y \
+    wget \
+    cmake \
+    g++ \
+    zlib1g-dev \
+    libbz2-dev \
+    curl \
+    git \
+    vim \
+    nano \
+    htop \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install MMseqs2
+RUN wget https://mmseqs.com/latest/mmseqs-linux-avx2.tar.gz && \
+    tar xvfz mmseqs-linux-avx2.tar.gz && \
+    mv mmseqs/bin/mmseqs /usr/local/bin/ && \
+    rm -rf mmseqs mmseqs-linux-avx2.tar.gz
+
+# Install Python dependencies
+RUN pip install --no-cache-dir numpy pandas
+
+# Install JupyterLab
+RUN pip install jupyterlab
+
+# Install VSCode Server
+RUN curl -fsSL https://code-server.dev/install.sh | sh
+
+# Install VSCode Python extension
+RUN code-server --install-extension ms-python.python
+
+# Copy service code
+COPY services/msa_features_lite/ /app/services/msa_features_lite/
+
+# Set working directory
+WORKDIR /app/services/msa_features_lite
+
+# Create a startup script for development environment
+RUN echo '#!/bin/bash\n\
+# Start JupyterLab in background\n\
+jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token="" --NotebookApp.password="" &\n\
+# Start VSCode Server in background\n\
+code-server --bind-addr 0.0.0.0:8080 --auth none --disable-telemetry &\n\
+# Keep container running\n\
+tail -f /dev/null' > /app/start-dev.sh && chmod +x /app/start-dev.sh
+
+# Expose ports for JupyterLab and VSCode
+EXPOSE 8888 8080
+
+# Set default command for development
+CMD ["/app/start-dev.sh"]
