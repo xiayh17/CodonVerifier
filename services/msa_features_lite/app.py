@@ -27,6 +27,8 @@ import os
 import subprocess
 import tempfile
 import shutil
+import time
+import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
@@ -38,6 +40,63 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+class ProgressIndicator:
+    """Simple progress indicator for long-running operations"""
+    
+    def __init__(self, message: str, show_dots: bool = True):
+        self.message = message
+        self.show_dots = show_dots
+        self.running = False
+        self.thread = None
+        self.start_time = None
+    
+    def start(self):
+        """Start the progress indicator"""
+        if self.running:
+            return
+        
+        self.running = True
+        self.start_time = time.time()
+        self.thread = threading.Thread(target=self._animate, daemon=True)
+        self.thread.start()
+        logger.info(f"Starting: {self.message}")
+    
+    def stop(self, success: bool = True):
+        """Stop the progress indicator"""
+        if not self.running:
+            return
+        
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=1)
+        
+        elapsed = time.time() - self.start_time if self.start_time else 0
+        status = "✓" if success else "✗"
+        logger.info(f"{status} {self.message} (took {elapsed:.1f}s)")
+    
+    def _animate(self):
+        """Animation thread"""
+        dots = 0
+        while self.running:
+            if self.show_dots:
+                dots_str = "." * (dots % 4)
+                print(f"\r{self.message}{dots_str}", end="", flush=True)
+                dots += 1
+            time.sleep(0.5)
+        if self.show_dots:
+            print()  # New line after animation
+
+
+@dataclass
+class DatabaseStats:
+    """Database statistics"""
+    total_size_gb: float = 0.0
+    sequence_count: int = 0
+    database_type: str = "unknown"
+    is_valid: bool = False
+    initialization_time: float = 0.0
 
 
 @dataclass
@@ -336,7 +395,10 @@ class RealMSAGenerator:
         min_seq_id: float = 0.3,
         coverage: float = 0.5,
         use_gpu: bool = False,
-        gpu_id: int = 0
+        gpu_id: int = 0,
+        db_init_timeout: int = 300,
+        search_timeout: int = 600,
+        show_progress: bool = True
     ):
         self.database = database
         self.threads = threads
@@ -345,6 +407,10 @@ class RealMSAGenerator:
         self.coverage = coverage
         self.use_gpu = use_gpu
         self.gpu_id = gpu_id
+        self.db_init_timeout = db_init_timeout
+        self.search_timeout = search_timeout
+        self.show_progress = show_progress
+        self.database_stats = DatabaseStats()
         self.mmseqs_available = self._check_mmseqs2()
         self.database_available = False
         self.gpu_available = False
@@ -382,7 +448,9 @@ class RealMSAGenerator:
         return False
     
     def _check_database(self) -> bool:
-        """Check if MMseqs2 database exists and is valid"""
+        """Check if MMseqs2 database exists and is valid with progress display"""
+        start_time = time.time()
+        
         if not os.path.exists(self.database):
             logger.error(f"Database not found: {self.database}")
             return False
@@ -399,23 +467,149 @@ class RealMSAGenerator:
                 logger.error(f"Database file missing: {file_path}")
                 return False
         
-        # Try to read database info using view command
+        # Calculate database size
+        self._calculate_database_size()
+        
+        # Try to read database info using view command with progress display
+        progress = None
+        if self.show_progress:
+            progress = ProgressIndicator("Initializing database (this may take several minutes for large databases)")
+            progress.start()
+        
         try:
+            # Use longer timeout for large databases
+            timeout = max(60, self.db_init_timeout)
             result = subprocess.run(
                 ['mmseqs', 'view', self.database],
                 capture_output=True,
                 text=True,
-                timeout=10
+                timeout=timeout
             )
+            
+            if progress:
+                progress.stop(success=True)
+            
             if result.returncode == 0:
-                logger.info(f"Database valid: {self.database}")
+                # Parse database statistics
+                self._parse_database_info(result.stdout)
+                self.database_stats.is_valid = True
+                self.database_stats.initialization_time = time.time() - start_time
+                
+                logger.info(f"✓ Database valid: {self.database}")
+                logger.info(f"  Size: {self.database_stats.total_size_gb:.1f} GB")
+                logger.info(f"  Sequences: {self.database_stats.sequence_count:,}")
+                logger.info(f"  Type: {self.database_stats.database_type}")
+                logger.info(f"  Init time: {self.database_stats.initialization_time:.1f}s")
                 return True
             else:
+                if progress:
+                    progress.stop(success=False)
                 logger.error(f"Database invalid: {result.stderr}")
                 return False
-        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+                
+        except subprocess.TimeoutExpired:
+            if progress:
+                progress.stop(success=False)
+            logger.error(f"Database initialization timed out after {timeout}s")
+            logger.warning("For large databases (50GB+), consider:")
+            logger.warning("1. Increasing --db-init-timeout (default: 300s)")
+            logger.warning("2. Using a smaller database for testing")
+            logger.warning("3. Ensuring sufficient disk I/O performance")
+            return False
+        except (FileNotFoundError, Exception) as e:
+            if progress:
+                progress.stop(success=False)
             logger.error(f"Database check failed: {e}")
             return False
+    
+    def _calculate_database_size(self):
+        """Calculate total database size in GB"""
+        total_size = 0
+        try:
+            # Get all database-related files
+            db_files = [
+                f"{self.database}.dbtype",
+                f"{self.database}.index", 
+                f"{self.database}.lookup",
+                f"{self.database}.source",
+                f"{self.database}.h",
+                f"{self.database}.h.index",
+                f"{self.database}.h.dbtype"
+            ]
+            
+            for file_path in db_files:
+                if os.path.exists(file_path):
+                    total_size += os.path.getsize(file_path)
+            
+            # Also check for additional files that might exist
+            db_dir = os.path.dirname(self.database)
+            db_name = os.path.basename(self.database)
+            
+            if os.path.exists(db_dir):
+                for file in os.listdir(db_dir):
+                    if file.startswith(db_name):
+                        file_path = os.path.join(db_dir, file)
+                        if os.path.isfile(file_path):
+                            total_size += os.path.getsize(file_path)
+            
+            self.database_stats.total_size_gb = total_size / (1024**3)
+            
+        except Exception as e:
+            logger.warning(f"Could not calculate database size: {e}")
+            self.database_stats.total_size_gb = 0.0
+    
+    def _parse_database_info(self, output: str):
+        """Parse database information from mmseqs view output"""
+        try:
+            # For large databases, mmseqs view might not return all sequences
+            # Try to get sequence count using mmseqs result2stats instead
+            try:
+                result = subprocess.run(
+                    ['mmseqs', 'result2stats', self.database, self.database, '/dev/null', '--stat', 'linecount'],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                if result.returncode == 0:
+                    # Parse the line count from output
+                    lines = result.stdout.strip().split('\n')
+                    for line in lines:
+                        if 'linecount' in line.lower():
+                            try:
+                                count_str = line.split()[-1]
+                                self.database_stats.sequence_count = int(count_str)
+                                break
+                            except (ValueError, IndexError):
+                                pass
+            except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
+                pass
+            
+            # Fallback: count from view output if result2stats failed
+            if self.database_stats.sequence_count == 0:
+                lines = output.strip().split('\n')
+                sequence_count = 0
+                
+                # Count sequences (each line represents a sequence)
+                for line in lines:
+                    if line.strip() and not line.startswith('#'):
+                        sequence_count += 1
+                
+                self.database_stats.sequence_count = sequence_count
+            
+            # Try to determine database type from path
+            if 'uniref' in self.database.lower():
+                self.database_stats.database_type = "UniRef"
+            elif 'swiss' in self.database.lower():
+                self.database_stats.database_type = "Swiss-Prot"
+            elif 'nr' in self.database.lower():
+                self.database_stats.database_type = "NR"
+            else:
+                self.database_stats.database_type = "Custom"
+                
+        except Exception as e:
+            logger.warning(f"Could not parse database info: {e}")
+            self.database_stats.sequence_count = 0
+            self.database_stats.database_type = "Unknown"
     
     def _check_gpu(self) -> bool:
         """Check if GPU is available for MMseqs2"""
@@ -430,23 +624,29 @@ class RealMSAGenerator:
             if result.returncode == 0 and result.stdout.strip():
                 gpu_name = result.stdout.strip()
                 logger.info(f"Found GPU: {gpu_name}")
-                return True
+                
+                # Check if MMseqs2 actually supports GPU
+                try:
+                    result = subprocess.run(
+                        ['mmseqs', 'search', '--help'],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    if '--gpu' in result.stdout:
+                        logger.info("MMseqs2 supports GPU acceleration")
+                        return True
+                    else:
+                        logger.warning("GPU detected but MMseqs2 does not support GPU acceleration")
+                        return False
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    logger.warning("Could not check MMseqs2 GPU support")
+                    return False
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
         
-        # Try to check CUDA availability
-        try:
-            result = subprocess.run(
-                ['mmseqs', 'search', '--help'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            if '--gpu' in result.stdout:
-                logger.info("MMseqs2 supports GPU, but no GPU detected")
-            return False
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            return False
+        logger.info("No GPU detected or available")
+        return False
     
     def generate_msa_features_batch(
         self,
@@ -463,14 +663,25 @@ class RealMSAGenerator:
             logger.warning("MMseqs2 or database not available, using Lite fallback")
             return {}
         
-        # Smart GPU/CPU selection based on batch size
+        # Smart GPU/CPU selection based on batch size and database size
         batch_size = len(records)
         use_gpu_for_this_batch = self.use_gpu and self.gpu_available
         
-        # For small batches, CPU is often faster due to GPU initialization overhead
-        if batch_size < 50 and use_gpu_for_this_batch:
-            logger.info(f"Small batch size ({batch_size}), using CPU for better performance")
-            use_gpu_for_this_batch = False
+        # For large databases (30GB+), GPU is beneficial even for small batches
+        # For small databases, only use GPU for larger batches
+        if use_gpu_for_this_batch:
+            if self.database_stats.total_size_gb >= 30.0:
+                # Large database: use GPU even for small batches
+                logger.info(f"Large database ({self.database_stats.total_size_gb:.1f}GB), using GPU for batch size {batch_size}")
+            elif batch_size < 20:
+                # Small database + small batch: use CPU
+                logger.info(f"Small batch size ({batch_size}) with small database, using CPU for better performance")
+                use_gpu_for_this_batch = False
+            else:
+                # Small database + large batch: use GPU
+                logger.info(f"Using GPU for batch size {batch_size}")
+        else:
+            logger.info(f"Using CPU (GPU not available or disabled)")
         
         # Write sequences to FASTA
         fasta_file = os.path.join(work_dir, "queries.fasta")
@@ -536,16 +747,24 @@ class RealMSAGenerator:
             
             # Add GPU support if available
             if self.use_gpu and self.gpu_available:
-                # GPU-specific optimizations
+                # GPU-specific optimizations for large databases
+                # Note: MMseqs2 GPU parameters are limited
                 search_cmd.extend([
-                    '--gpu', str(self.gpu_id),
-                    '--gpu-memory', '8192',  # 限制GPU显存使用
-                    '--batch-size', '32'     # GPU批次大小
+                    '--gpu', str(self.gpu_id)
                 ])
-                logger.info(f"Using GPU {self.gpu_id} for MMseqs2 search with GPU optimizations")
+                logger.info(f"Using GPU {self.gpu_id} for MMseqs2 search")
+                
+                # Add memory limit if needed (using split-memory-limit instead of gpu-memory)
+                if self.database_stats.total_size_gb >= 30.0:
+                    search_cmd.extend(['--split-memory-limit', '12288'])
+                    logger.info(f"  Using split-memory-limit: 12288MB for large database")
             
-            # Run MMseqs2 search with timeout
-            timeout_duration = 600 if self.use_gpu else 300  # GPU需要更长初始化时间
+            # Run MMseqs2 search with configurable timeout
+            timeout_duration = self.search_timeout
+            if self.use_gpu and self.gpu_available:
+                # GPU searches may need longer timeout due to initialization
+                timeout_duration = max(timeout_duration, 900)
+            
             try:
                 logger.info(f"Running MMseqs2 search with {timeout_duration}s timeout...")
                 result = subprocess.run(
@@ -565,12 +784,36 @@ class RealMSAGenerator:
                 logger.error(f"MMseqs2 search failed: {e}")
                 logger.error(f"Command: {' '.join(search_cmd)}")
                 logger.error(f"Stderr: {e.stderr}")
-                if self.use_gpu:
-                    logger.warning("GPU search failed, this may be due to:")
+                
+                # If GPU search failed, try CPU fallback
+                if self.use_gpu and self.gpu_available:
+                    logger.warning("GPU search failed, attempting CPU fallback...")
+                    logger.warning("GPU failure may be due to:")
                     logger.warning("1. MMseqs2 not compiled with GPU support")
                     logger.warning("2. CUDA drivers not properly installed")
                     logger.warning("3. GPU memory insufficient")
-                return None
+                    logger.warning("4. Unsupported GPU parameters")
+                    
+                    # Remove GPU parameters and retry with CPU
+                    cpu_cmd = [cmd for cmd in search_cmd if not cmd.startswith('--gpu') and cmd != str(self.gpu_id)]
+                    cpu_cmd = [cmd for cmd in cpu_cmd if not cmd.startswith('--split-memory-limit')]
+                    
+                    try:
+                        logger.info("Retrying with CPU-only search...")
+                        result = subprocess.run(
+                            cpu_cmd,
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                            timeout=timeout_duration
+                        )
+                        logger.info("CPU fallback search completed successfully")
+                        # Continue with CPU result
+                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as cpu_e:
+                        logger.error(f"CPU fallback also failed: {cpu_e}")
+                        return None
+                else:
+                    return None
             
             # Convert to TSV
             result_tsv = os.path.join(output_dir, "result.tsv")
@@ -764,6 +1007,9 @@ def main():
     parser.add_argument('--batch-size', type=int, default=100, help="Batch size for MMseqs2 processing")
     parser.add_argument('--use-gpu', action='store_true', help="Use GPU acceleration for MMseqs2 (requires CUDA)")
     parser.add_argument('--gpu-id', type=int, default=0, help="GPU ID to use (default: 0)")
+    parser.add_argument('--db-init-timeout', type=int, default=300, help="Database initialization timeout in seconds (default: 300)")
+    parser.add_argument('--search-timeout', type=int, default=600, help="MMseqs2 search timeout in seconds (default: 600)")
+    parser.add_argument('--no-progress', action='store_true', help="Disable progress indicators for database initialization")
     parser.add_argument('--log-level', default='INFO', 
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'])
     
@@ -801,7 +1047,10 @@ def main():
                 database=args.database,
                 threads=args.threads,
                 use_gpu=args.use_gpu,
-                gpu_id=args.gpu_id
+                gpu_id=args.gpu_id,
+                db_init_timeout=args.db_init_timeout,
+                search_timeout=args.search_timeout,
+                show_progress=not args.no_progress
             )
             
             # Process in batches
