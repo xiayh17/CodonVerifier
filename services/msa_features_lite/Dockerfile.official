@@ -1,0 +1,34 @@
+# Use official MMseqs2 Docker image with GPU support
+FROM ghcr.io/soedinglab/mmseqs2:latest
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+
+WORKDIR /app
+
+# Install Python 3.11 (available in Debian bookworm)
+RUN apt-get update && apt-get install -y \
+    python3.11 \
+    python3.11-dev \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create symlink for python
+RUN ln -s /usr/bin/python3.11 /usr/bin/python
+
+# Install Python dependencies
+RUN pip install --no-cache-dir numpy pandas
+
+# Copy service code
+COPY services/msa_features_lite/ /app/services/msa_features_lite/
+
+# Set working directory
+WORKDIR /app/services/msa_features_lite
+
+# Verify MMseqs2 installation and CUDA support
+RUN mmseqs version && \
+    mmseqs search --help | grep -i gpu && \
+    echo "✓ MMseqs2 with CUDA support ready"
+
+# Set default command (can be overridden)
+CMD ["python", "app.py"]

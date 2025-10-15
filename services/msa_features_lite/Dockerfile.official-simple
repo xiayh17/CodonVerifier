@@ -1,5 +1,5 @@
 # Use official MMseqs2 Docker image with GPU support
-FROM ghcr.io/soedinglab/mmseqs2:master-cuda12
+FROM ghcr.io/soedinglab/mmseqs2:latest
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
@@ -7,9 +7,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 
 # Install Python dependencies (using existing Python in the image)
-RUN apt-get update && apt-get install -y \
-    python3 \
-    && rm -rf /var/lib/apt/lists/*
+# RUN apt-get update && apt-get install -y \
+#     python3-pip \
+#     && rm -rf /var/lib/apt/lists/*
 
 # Install Python packages
 # RUN pip3 install --no-cache-dir numpy pandas
@@ -21,15 +21,9 @@ COPY services/msa_features_lite/ /app/services/msa_features_lite/
 WORKDIR /app/services/msa_features_lite
 
 # Verify MMseqs2 installation and CUDA support
-# RUN mmseqs version && \
-#     mmseqs search --help | grep -i gpu && \
-#     echo "✓ MMseqs2 with CUDA support ready"
+RUN mmseqs version && \
+    mmseqs search --help | grep -i gpu && \
+    echo "✓ MMseqs2 with CUDA support ready"
 
 # Set default command (can be overridden)
-# CMD ["python3", "app.py"]
-
-# Create symbolic link for mmseqs command
-RUN ln -sf /usr/local/bin/mmseqs_avx2 /usr/local/bin/mmseqs
-
-# Override the entrypoint to allow interactive sessions
-ENTRYPOINT []
+CMD ["python3", "app.py"]

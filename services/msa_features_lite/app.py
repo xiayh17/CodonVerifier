@@ -397,7 +397,7 @@ class RealMSAGenerator:
         use_gpu: bool = False,
         gpu_id: int = 0,
         db_init_timeout: int = 300,
-        search_timeout: int = 600,
+        search_timeout: int = 60000,
         show_progress: bool = True
     ):
         self.database = database
@@ -638,6 +638,7 @@ class RealMSAGenerator:
                         return True
                     else:
                         logger.warning("GPU detected but MMseqs2 does not support GPU acceleration")
+                        logger.warning("MMseqs2 was likely compiled without CUDA support")
                         return False
                 except (FileNotFoundError, subprocess.TimeoutExpired):
                     logger.warning("Could not check MMseqs2 GPU support")
@@ -721,8 +722,10 @@ class RealMSAGenerator:
         try:
             # Create query database
             query_db = os.path.join(output_dir, "query_db")
+            createdb_cmd = ['mmseqs', 'createdb', query_fasta, query_db]
+            logger.info(f"Creating query database: {' '.join(createdb_cmd)}")
             subprocess.run(
-                ['mmseqs', 'createdb', query_fasta, query_db],
+                createdb_cmd,
                 check=True,
                 capture_output=True
             )
@@ -745,19 +748,37 @@ class RealMSAGenerator:
                 '-s', '7.5'  # 降低敏感度以提高速度
             ]
             
+            # Log the complete command for debugging
+            logger.info("=== MMseqs2 Search Command ===")
+            logger.info(f"Command: {' '.join(search_cmd)}")
+            logger.info(f"Query DB: {query_db}")
+            logger.info(f"Target DB: {self.database}")
+            logger.info(f"Result DB: {result_db}")
+            logger.info(f"Temp Dir: {tmp_dir}")
+            logger.info(f"Threads: {self.threads}")
+            logger.info(f"E-value: {self.evalue}")
+            logger.info(f"Min Seq ID: {self.min_seq_id}")
+            logger.info(f"Coverage: {self.coverage}")
+            logger.info("================================")
+            
             # Add GPU support if available
             if self.use_gpu and self.gpu_available:
                 # GPU-specific optimizations for large databases
-                # Note: MMseqs2 GPU parameters are limited
+                # Note: MMseqs2 --gpu parameter: 0=disable, 1=enable (not GPU ID)
                 search_cmd.extend([
-                    '--gpu', str(self.gpu_id)
+                    '--gpu', '1'  # Enable GPU (not GPU ID)
                 ])
-                logger.info(f"Using GPU {self.gpu_id} for MMseqs2 search")
+                logger.info(f"Enabling GPU acceleration for MMseqs2 search (GPU {self.gpu_id} available)")
                 
                 # Add memory limit if needed (using split-memory-limit instead of gpu-memory)
                 if self.database_stats.total_size_gb >= 30.0:
                     search_cmd.extend(['--split-memory-limit', '12288'])
                     logger.info(f"  Using split-memory-limit: 12288MB for large database")
+                
+                # Log updated command with GPU parameters
+                logger.info("=== Updated MMseqs2 Command (GPU Enabled) ===")
+                logger.info(f"Final Command: {' '.join(search_cmd)}")
+                logger.info("=============================================")
             
             # Run MMseqs2 search with configurable timeout
             timeout_duration = self.search_timeout
@@ -795,8 +816,13 @@ class RealMSAGenerator:
                     logger.warning("4. Unsupported GPU parameters")
                     
                     # Remove GPU parameters and retry with CPU
-                    cpu_cmd = [cmd for cmd in search_cmd if not cmd.startswith('--gpu') and cmd != str(self.gpu_id)]
+                    cpu_cmd = [cmd for cmd in search_cmd if not cmd.startswith('--gpu') and cmd != '1']
                     cpu_cmd = [cmd for cmd in cpu_cmd if not cmd.startswith('--split-memory-limit')]
+                    
+                    # Log CPU fallback command
+                    logger.info("=== CPU Fallback Command ===")
+                    logger.info(f"CPU Command: {' '.join(cpu_cmd)}")
+                    logger.info("============================")
                     
                     try:
                         logger.info("Retrying with CPU-only search...")
@@ -817,11 +843,13 @@ class RealMSAGenerator:
             
             # Convert to TSV
             result_tsv = os.path.join(output_dir, "result.tsv")
-            subprocess.run([
+            convertalis_cmd = [
                 'mmseqs', 'convertalis',
                 query_db, self.database, result_db, result_tsv,
                 '--format-output', 'query,target,pident,alnlen,mismatch,gapopen,qstart,qend,tstart,tend,evalue,bits'
-            ], check=True, capture_output=True)
+            ]
+            logger.info(f"Converting results to TSV: {' '.join(convertalis_cmd)}")
+            subprocess.run(convertalis_cmd, check=True, capture_output=True)
             
             return result_tsv
             

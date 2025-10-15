@@ -46,14 +46,15 @@ echo ""
 echo "🏃 测试1: 小批次CPU模式 (10条记录)..."
 docker run --rm \
     --gpus all \
+    --entrypoint="" \
     -v "$(pwd)/data":/data \
     codon-verifier/msa-features-lite:latest \
-    python app.py \
+    python3 app.py \
     --input /data/enhanced/Pic_complete_v2.jsonl \
     --output /data/real_msa/Pic_cpu_test.jsonl \
     --use-mmseqs2 \
     --database "/data/mmseqs_db/test_production/SwissProt" \
-    --threads 8 \
+    --threads 20 \
     --batch-size 10 \
     --limit 10
 
@@ -61,16 +62,17 @@ echo ""
 echo "🏃 测试2: GPU模式 (10条记录，但会自动切换到CPU)..."
 docker run --rm \
     --gpus all \
+    --entrypoint="" \
     -v "$(pwd)/data":/data \
     codon-verifier/msa-features-lite:latest \
-    python app.py \
+    python3 app.py \
     --input /data/enhanced/Pic_complete_v2.jsonl \
     --output /data/real_msa/Pic_gpu_smart_test.jsonl \
     --use-mmseqs2 \
     --database "/data/mmseqs_db/test_production/SwissProt" \
     --use-gpu \
     --gpu-id 0 \
-    --threads 8 \
+    --threads 20 \
     --batch-size 10 \
     --limit 10
 
@@ -78,27 +80,29 @@ echo ""
 echo "🏃 测试3: 中等批次GPU模式 (50条记录)..."
 docker run --rm \
     --gpus all \
+    --entrypoint="" \
     -v "$(pwd)/data":/data \
     codon-verifier/msa-features-lite:latest \
-    python app.py \
+    python3 app.py \
     --input /data/enhanced/Pic_complete_v2.jsonl \
     --output /data/real_msa/Pic_gpu_medium_test.jsonl \
     --use-mmseqs2 \
     --database "/data/mmseqs_db/test_production/SwissProt" \
     --use-gpu \
     --gpu-id 0 \
-    --threads 8 \
+    --threads 20 \
     --batch-size 50 \
     --limit 50
 
 echo ""
-echo "🏃 测试4: 中等数据库测试 (20条记录，使用production数据库)..."
+echo "🏃 测试4: 中等数据库测试 (100条记录，使用production数据库)..."
 if [ -f "$PRODUCTION_DB" ]; then
     docker run --rm \
         --gpus all \
+        --entrypoint="" \
         -v "$(pwd)/data":/data \
         codon-verifier/msa-features-lite:latest \
-        python app.py \
+        python3 app.py \
         --input /data/enhanced/Pic_complete_v2.jsonl \
         --output /data/real_msa/Pic_production_db_test.jsonl \
         --use-mmseqs2 \
@@ -106,8 +110,10 @@ if [ -f "$PRODUCTION_DB" ]; then
         --use-gpu \
         --gpu-id 0 \
         --threads 8 \
-        --batch-size 20 \
-        --limit 20
+        --batch-size 100 \
+        --limit 100 \
+        --db-init-timeout 600 \
+        --search-timeout 6000
 else
     echo "⚠️  跳过中等数据库测试 - Production数据库不存在"
 fi

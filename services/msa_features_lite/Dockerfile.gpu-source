@@ -1,0 +1,59 @@
+FROM nvidia/cuda:11.8-devel-ubuntu20.04
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=${CUDA_HOME}/bin:${PATH}
+ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    wget \
+    cmake \
+    g++ \
+    git \
+    zlib1g-dev \
+    libbz2-dev \
+    libomp-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python 3.10
+RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y python3.10 python3.10-dev python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create symlink for python
+RUN ln -s /usr/bin/python3.10 /usr/bin/python
+
+# Clone and compile MMseqs2 with CUDA support
+RUN git clone https://github.com/soedinglab/MMseqs2.git && \
+    cd MMseqs2 && \
+    mkdir build && \
+    cd build && \
+    cmake -DHAVE_CUDA=1 -DCMAKE_BUILD_TYPE=Release .. && \
+    make -j$(nproc) && \
+    make install && \
+    cd /app && \
+    rm -rf MMseqs2
+
+# Verify MMseqs2 installation and CUDA support
+RUN mmseqs version && \
+    mmseqs search --help | grep -i gpu && \
+    echo "✓ MMseqs2 compiled with CUDA support"
+
+# Install Python dependencies
+RUN pip install --no-cache-dir numpy pandas
+
+# Copy service code
+COPY services/msa_features_lite/ /app/services/msa_features_lite/
+
+# Set working directory
+WORKDIR /app/services/msa_features_lite
+
+# Set default command (can be overridden)
+CMD ["python", "app.py"]
