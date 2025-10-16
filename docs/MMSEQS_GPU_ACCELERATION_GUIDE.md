@@ -236,11 +236,11 @@ nvidia-smi --query-gpu=name,memory.total,memory.used --format=csv
 # 根据显存调整批次大小
 GPU_MEMORY=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1)
 if [ "$GPU_MEMORY" -gt 20000 ]; then
-    BATCH_SIZE=200
+    BATCH_SIZE=20000
 elif [ "$GPU_MEMORY" -gt 10000 ]; then
-    BATCH_SIZE=100
+    BATCH_SIZE=10000
 else
-    BATCH_SIZE=50
+    BATCH_SIZE=5000
 fi
 
 # 运行 GPU 加速
@@ -275,7 +275,7 @@ for species in Ec Human mouse Pic Sac; do
     --database /data/mmseqs_db/production/UniRef50 \
     --use-gpu \
     --gpu-id 0 \
-    --batch-size 100 \
+    --batch-size 100000 \
     --threads 4
   
   echo "✓ ${species} completed"
