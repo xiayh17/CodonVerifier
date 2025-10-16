@@ -210,7 +210,7 @@ def extract_structure_features(protein_aa: str) -> Dict[str, float]:
         from services.structure_features_lite.app import StructureFeaturesLite
         from dataclasses import asdict
         
-        lite = StructureFeaturesLite(use_afdb=False)  # Disable AFDB for speed
+        lite = StructureFeaturesLite(use_afdb=True)  # Disable AFDB for speed
         struct_feat = lite.predict_structure(aa_sequence=protein_aa)
         
         # Flatten structure features with struct_ prefix
